@@ -421,8 +421,8 @@ pub async fn task_queue_get(
 /// PATCH /api/tasks/{id} — Update task status.
 ///
 /// Body: `{"status": "pending"}` or `{"status": "cancelled"}`
-/// - `pending`: resets a failed task so it can be re-claimed; active tasks
-///   must not be re-queued because that can cause duplicate execution
+/// - `pending`: resets a failed or cancelled task so it can be re-claimed;
+///   active tasks must not be re-queued because that can cause duplicate execution
 /// - `cancelled`: cancels a pending/in_progress task
 ///
 /// A transition the task's current state does not allow (for example `pending` on a completed task, or `cancelled` on an already-cancelled one) answers 409 Conflict; 404 is reserved for an id that does not exist.
