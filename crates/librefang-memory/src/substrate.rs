@@ -1897,8 +1897,9 @@ impl MemorySubstrate {
 
     /// Update a task's status to `pending` (reset) or `cancelled`.
     ///
-    /// Only `failed` tasks can be reset to `pending`; an `in_progress` task
-    /// remains claimed so a second worker cannot execute it concurrently.
+    /// Only `failed` or `cancelled` tasks can be reset to `pending`; an
+    /// `in_progress` task remains claimed so a second worker cannot execute it
+    /// concurrently.
     /// Any non-terminal task can be cancelled.
     /// Returns `false` when the task was not found or the transition is invalid.
     pub async fn task_update_status(
@@ -1915,14 +1916,14 @@ impl MemorySubstrate {
             let now_unix = chrono::Utc::now().timestamp();
             let rows = match new_status.as_str() {
                 // Reset to pending: clear `finished_at` so a previous
-                // `failed` stamp (line 985) doesn't make the row look
+                // terminal stamp doesn't make the row look
                 // immediately prune-eligible if it later fails again
                 // before the timestamp is refreshed (#3466).
                 "pending" => db.execute(
                     "UPDATE task_queue \
-                     SET status = 'pending', claimed_at = NULL, assigned_to = '', \
-                         finished_at = NULL \
-                     WHERE id = ?1 AND status = 'failed'",
+                     SET status = 'pending', result = NULL, completed_at = NULL, \
+                         claimed_at = NULL, assigned_to = '', finished_at = NULL \
+                     WHERE id = ?1 AND status IN ('failed', 'cancelled')",
                     rusqlite::params![task_id],
                 ),
                 // Cancellation is a terminal transition like complete/fail,
@@ -4012,6 +4013,73 @@ mod tests {
             finished_at.is_none(),
             "reset to pending must clear finished_at"
         );
+    }
+
+    #[tokio::test]
+    async fn test_task_reset_to_pending_requeues_cancelled_task() {
+        let substrate = MemorySubstrate::open_in_memory(0.1).unwrap();
+        let task_id = substrate
+            .task_post(
+                "t",
+                "d",
+                Some("worker"),
+                None,
+                0,
+                None,
+                TaskQueueCaps::UNLIMITED,
+            )
+            .await
+            .unwrap();
+
+        {
+            let conn = substrate.pool.get().unwrap();
+            conn.execute(
+                "UPDATE task_queue \
+                 SET status = 'cancelled', result = 'cancelled result', \
+                     completed_at = ?2, claimed_at = ?2, assigned_to = 'worker', \
+                     finished_at = ?2 \
+                 WHERE id = ?1",
+                rusqlite::params![&task_id, chrono::Utc::now().timestamp()],
+            )
+            .unwrap();
+        }
+
+        assert!(substrate
+            .task_update_status(&task_id, "pending")
+            .await
+            .unwrap());
+
+        let conn = substrate.pool.get().unwrap();
+        let (status, result, completed_at, claimed_at, assigned_to, finished_at): (
+            String,
+            Option<String>,
+            Option<i64>,
+            Option<String>,
+            String,
+            Option<i64>,
+        ) = conn
+            .query_row(
+                "SELECT status, result, completed_at, claimed_at, assigned_to, finished_at \
+                 FROM task_queue WHERE id = ?1",
+                rusqlite::params![&task_id],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(status, "pending");
+        assert!(result.is_none());
+        assert!(completed_at.is_none());
+        assert!(claimed_at.is_none());
+        assert_eq!(assigned_to, "");
+        assert!(finished_at.is_none());
     }
 
     #[tokio::test]
