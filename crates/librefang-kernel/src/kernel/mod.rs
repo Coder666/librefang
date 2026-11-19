@@ -146,6 +146,7 @@ pub mod step_agent;
 mod subsystem_forwards;
 pub mod subsystems;
 mod task_registry;
+mod task_scheduler_plugin;
 mod tools_and_skills;
 pub use tools_and_skills::{PendingSkillMcpDeclarations, SemanticMemoryAccess, SkillReloadOutcome};
 mod triggers_and_workflow;

@@ -793,6 +793,7 @@ impl LibreFangKernel {
         }
         let global_wake = cfg.task_board.assignee_wake;
         let backoff_cap = cfg.task_board.wake_backoff_max_secs.max(grace_secs);
+        let scheduler_plugin = cfg.task_board.scheduler_plugin.clone();
 
         let pending = match self.memory.substrate.task_list(Some("pending")).await {
             Ok(tasks) => tasks,
@@ -951,6 +952,57 @@ impl LibreFangKernel {
                 workflow_id: None,
                 source: TriggerMatchSource::TaskBoardAssigneeWake { task_id: oldest },
             });
+        }
+
+        if let Some(plugin) = scheduler_plugin.filter(|_| !matches.is_empty()) {
+            use librefang_types::config::TaskSchedulerPluginFailureMode;
+            use std::collections::BTreeMap;
+
+            let builtin_matches = matches.clone();
+            let status_counts = match self.memory.substrate.task_status_counts().await {
+                Ok(counts) => Some(counts.into_iter().collect::<BTreeMap<String, u64>>()),
+                Err(error) => {
+                    warn!(%error, "Task board scheduler plugin: failed to read status counts");
+                    None
+                }
+            };
+            let decision = match status_counts {
+                Some(status_counts) => {
+                    super::task_scheduler_plugin::apply(
+                        &plugin,
+                        builtin_matches.clone(),
+                        &pending,
+                        &status_counts,
+                    )
+                    .await
+                }
+                None => Err("task status counts unavailable".to_string()),
+            };
+            match decision {
+                Ok(selected) => matches = selected,
+                Err(error) => {
+                    warn!(%error, "Task board scheduler plugin failed");
+                    matches =
+                        if matches!(plugin.on_failure, TaskSchedulerPluginFailureMode::Suppress) {
+                            Vec::new()
+                        } else {
+                            builtin_matches.clone()
+                        };
+                }
+            }
+
+            // A suppressed candidate was not actually woken. Remove the
+            // provisional backoff entry so a later scheduler cycle may
+            // reconsider it without inheriting a wake that never ran.
+            let selected_agents: std::collections::HashSet<AgentId> =
+                matches.iter().map(|matched| matched.agent_id).collect();
+            for matched in &builtin_matches {
+                if !selected_agents.contains(&matched.agent_id) {
+                    self.governance
+                        .assignee_wake_state
+                        .remove(&matched.agent_id);
+                }
+            }
         }
 
         if !matches.is_empty() {

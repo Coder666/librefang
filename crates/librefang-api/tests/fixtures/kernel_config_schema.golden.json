@@ -1363,7 +1363,8 @@
         "max_retries": 0,
         "assignee_wake": true,
         "pending_grace_secs": 60,
-        "wake_backoff_max_secs": 900
+        "wake_backoff_max_secs": 900,
+        "scheduler_plugin": null
       },
       "allOf": [
         {
@@ -7434,6 +7435,18 @@
           "format": "uint64",
           "minimum": 0.0
         },
+        "scheduler_plugin": {
+          "description": "Optional executable policy for task-board wake selection and task decomposition. When absent, the built-in scheduler is used unchanged. The executable receives one JSON request on stdin and must return one JSON response on stdout.",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/TaskSchedulerPluginConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "sweep_interval_secs": {
           "description": "How often the sweeper scans for stuck tasks. Default: 30 s.",
           "default": 30,
@@ -7449,6 +7462,67 @@
           "minimum": 0.0
         }
       }
+    },
+    "TaskSchedulerPluginConfig": {
+      "description": "Configuration for an external task-board scheduler policy.",
+      "type": "object",
+      "properties": {
+        "args": {
+          "description": "Arguments passed to the executable. Put policy-specific configuration in a file and pass its path here.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "command": {
+          "description": "Executable path or name.",
+          "default": "",
+          "type": "string"
+        },
+        "max_response_bytes": {
+          "description": "Maximum accepted stdout size. Output beyond this limit is rejected.",
+          "default": 1048576,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "on_failure": {
+          "description": "Behavior when the plugin cannot produce a valid decision.",
+          "default": "builtin",
+          "allOf": [
+            {
+              "$ref": "#/definitions/TaskSchedulerPluginFailureMode"
+            }
+          ]
+        },
+        "timeout_secs": {
+          "description": "Maximum wall-clock duration for one policy evaluation.",
+          "default": 30,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      }
+    },
+    "TaskSchedulerPluginFailureMode": {
+      "description": "Failure policy for the external task-board scheduler.",
+      "oneOf": [
+        {
+          "description": "Log the error and use LibreFang's built-in wake decisions.",
+          "type": "string",
+          "enum": [
+            "builtin"
+          ]
+        },
+        {
+          "description": "Log the error and suppress this scheduler cycle.",
+          "type": "string",
+          "enum": [
+            "suppress"
+          ]
+        }
+      ]
     },
     "TavilySearchConfig": {
       "description": "Tavily Search API configuration.",

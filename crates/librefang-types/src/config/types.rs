@@ -3932,6 +3932,51 @@ pub struct TaskBoardConfig {
     /// tasks — a failing provider, a missing `task_claim` capability —
     /// would be woken on every tick forever.
     pub wake_backoff_max_secs: u64,
+    /// Optional executable policy for task-board wake selection and task
+    /// decomposition. When absent, the built-in scheduler is used unchanged.
+    /// The executable receives one JSON request on stdin and must return one
+    /// JSON response on stdout.
+    pub scheduler_plugin: Option<TaskSchedulerPluginConfig>,
+}
+
+/// Configuration for an external task-board scheduler policy.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(default)]
+pub struct TaskSchedulerPluginConfig {
+    /// Executable path or name.
+    pub command: String,
+    /// Arguments passed to the executable. Put policy-specific configuration
+    /// in a file and pass its path here.
+    pub args: Vec<String>,
+    /// Maximum wall-clock duration for one policy evaluation.
+    pub timeout_secs: u64,
+    /// Maximum accepted stdout size. Output beyond this limit is rejected.
+    pub max_response_bytes: u64,
+    /// Behavior when the plugin cannot produce a valid decision.
+    pub on_failure: TaskSchedulerPluginFailureMode,
+}
+
+impl Default for TaskSchedulerPluginConfig {
+    fn default() -> Self {
+        Self {
+            command: String::new(),
+            args: Vec::new(),
+            timeout_secs: 30,
+            max_response_bytes: 1_048_576,
+            on_failure: TaskSchedulerPluginFailureMode::Builtin,
+        }
+    }
+}
+
+/// Failure policy for the external task-board scheduler.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskSchedulerPluginFailureMode {
+    /// Log the error and use LibreFang's built-in wake decisions.
+    #[default]
+    Builtin,
+    /// Log the error and suppress this scheduler cycle.
+    Suppress,
 }
 
 impl Default for TaskBoardConfig {
@@ -3943,6 +3988,7 @@ impl Default for TaskBoardConfig {
             assignee_wake: true,
             pending_grace_secs: 60,
             wake_backoff_max_secs: 900,
+            scheduler_plugin: None,
         }
     }
 }

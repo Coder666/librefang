@@ -1,0 +1,10 @@
+{
+  "max_active_tasks": 1,
+  "max_wakes_per_cycle": 1,
+  "split_enabled": true,
+  "max_task_chars": 1200,
+  "compound_marker_threshold": 4,
+  "bullet_threshold": 6,
+  "compound_markers": [" and ", " also ", " additionally ", " then ", " plus "],
+  "state_file": "completion-first-state.json"
+}

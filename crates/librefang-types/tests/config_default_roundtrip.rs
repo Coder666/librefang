@@ -38,9 +38,9 @@ use librefang_types::config::{
     MemoryConfig, MemoryDecayConfig, NetworkConfig, PairingConfig, ParallelToolsConfig,
     PerplexitySearchConfig, PrivacyConfig, PromptIntelligenceConfig, QueueConcurrencyConfig,
     QueueConfig, RateLimitConfig, RegistryConfig, ReloadConfig, SanitizeConfig, SessionConfig,
-    SkillsConfig, TaskBoardConfig, TavilySearchConfig, TelemetryConfig, TerminalConfig,
-    ThinkingConfig, TriggersConfig, TtsConfig, VaultConfig, WebConfig, WebFetchConfig,
-    WebhookTriggerConfig,
+    SkillsConfig, TaskBoardConfig, TaskSchedulerPluginConfig, TavilySearchConfig, TelemetryConfig,
+    TerminalConfig, ThinkingConfig, TriggersConfig, TtsConfig, VaultConfig, WebConfig,
+    WebFetchConfig, WebhookTriggerConfig,
 };
 use serde::Serialize;
 
@@ -161,6 +161,11 @@ fn compaction_toml_config_default_roundtrips_through_toml() {
 #[test]
 fn task_board_config_default_roundtrips_through_toml() {
     assert_default_roundtrip::<TaskBoardConfig>("TaskBoardConfig");
+}
+
+#[test]
+fn task_scheduler_plugin_config_default_roundtrips_through_toml() {
+    assert_default_roundtrip::<TaskSchedulerPluginConfig>("TaskSchedulerPluginConfig");
 }
 
 #[test]
