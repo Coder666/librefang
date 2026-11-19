@@ -8,6 +8,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,7 @@ from typing import Any
 class Policy:
     max_active_tasks: int
     max_wakes_per_cycle: int
+    unclaimed_wake_hold_secs: int
     split_enabled: bool
     max_task_chars: int
     compound_marker_threshold: int
@@ -25,12 +27,21 @@ class Policy:
     state_file: Path
 
 
+@dataclass(frozen=True)
+class SchedulerState:
+    last_agent_id: str | None = None
+    last_task_id: str | None = None
+    last_wake_epoch: int | None = None
+    pending_count_at_wake: int | None = None
+
+
 def load_policy(path: Path) -> Policy:
     with path.open("r", encoding="utf-8") as stream:
         raw = json.load(stream)
     policy = Policy(
         max_active_tasks=int(raw["max_active_tasks"]),
         max_wakes_per_cycle=int(raw["max_wakes_per_cycle"]),
+        unclaimed_wake_hold_secs=int(raw["unclaimed_wake_hold_secs"]),
         split_enabled=bool(raw["split_enabled"]),
         max_task_chars=int(raw["max_task_chars"]),
         compound_marker_threshold=int(raw["compound_marker_threshold"]),
@@ -41,6 +52,7 @@ def load_policy(path: Path) -> Policy:
     for name in (
         "max_active_tasks",
         "max_wakes_per_cycle",
+        "unclaimed_wake_hold_secs",
         "max_task_chars",
         "compound_marker_threshold",
         "bullet_threshold",
@@ -68,20 +80,33 @@ def requires_split(candidate: dict[str, Any], policy: Policy) -> bool:
     )
 
 
-def load_cursor(path: Path) -> str | None:
+def load_state(path: Path) -> SchedulerState:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
-        return value.get("last_agent_id")
+        return SchedulerState(
+            last_agent_id=value.get("last_agent_id"),
+            last_task_id=value.get("last_task_id"),
+            last_wake_epoch=value.get("last_wake_epoch"),
+            pending_count_at_wake=value.get("pending_count_at_wake"),
+        )
     except (FileNotFoundError, OSError, json.JSONDecodeError, AttributeError):
-        return None
+        return SchedulerState()
 
 
-def store_cursor(path: Path, agent_id: str) -> None:
+def store_state(path: Path, state: SchedulerState) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     handle, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     try:
         with os.fdopen(handle, "w", encoding="utf-8") as stream:
-            json.dump({"last_agent_id": agent_id}, stream)
+            json.dump(
+                {
+                    "last_agent_id": state.last_agent_id,
+                    "last_task_id": state.last_task_id,
+                    "last_wake_epoch": state.last_wake_epoch,
+                    "pending_count_at_wake": state.pending_count_at_wake,
+                },
+                stream,
+            )
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temporary, path)
@@ -100,13 +125,28 @@ def rotate_after(candidates: list[dict[str, Any]], last_agent_id: str | None) ->
     return ordered
 
 
-def decide(request: dict[str, Any], policy: Policy, last_agent_id: str | None) -> list[dict[str, str]]:
+def decide(
+    request: dict[str, Any],
+    policy: Policy,
+    state: SchedulerState,
+    now_epoch: int,
+) -> list[dict[str, str]]:
     if request.get("protocol_version") != 1:
         raise ValueError("unsupported protocol_version")
     active = int(request.get("status_counts", {}).get("in_progress", 0))
     slots = max(0, policy.max_active_tasks - active)
     limit = min(slots, policy.max_wakes_per_cycle)
-    ordered = rotate_after(list(request.get("candidates", [])), last_agent_id)
+    candidates = list(request.get("candidates", []))
+    pending_count = int(request.get("status_counts", {}).get("pending", 0))
+    pending_has_not_decreased = (
+        state.pending_count_at_wake is not None
+        and pending_count >= state.pending_count_at_wake
+    )
+    if pending_has_not_decreased and state.last_wake_epoch is not None:
+        elapsed = max(0, now_epoch - state.last_wake_epoch)
+        if elapsed < policy.unclaimed_wake_hold_secs:
+            return []
+    ordered = rotate_after(candidates, state.last_agent_id)
     selected = ordered[:limit]
     return [
         {
@@ -124,9 +164,29 @@ def main() -> int:
     args = parser.parse_args()
     policy = load_policy(args.config.resolve())
     request = json.load(sys.stdin)
-    decisions = decide(request, policy, load_cursor(policy.state_file))
+    state = load_state(policy.state_file)
+    now_epoch = int(time.time())
+    pending_count = int(request.get("status_counts", {}).get("pending", 0))
+    if state.last_wake_epoch is not None and state.pending_count_at_wake is None:
+        state = SchedulerState(
+            last_agent_id=state.last_agent_id,
+            last_task_id=state.last_task_id,
+            last_wake_epoch=state.last_wake_epoch,
+            pending_count_at_wake=pending_count,
+        )
+        store_state(policy.state_file, state)
+    decisions = decide(request, policy, state, now_epoch)
     if decisions:
-        store_cursor(policy.state_file, decisions[-1]["agent_id"])
+        decision = decisions[-1]
+        store_state(
+            policy.state_file,
+            SchedulerState(
+                last_agent_id=decision["agent_id"],
+                last_task_id=decision["task_id"],
+                last_wake_epoch=now_epoch,
+                pending_count_at_wake=pending_count,
+            ),
+        )
     json.dump({"protocol_version": 1, "decisions": decisions}, sys.stdout)
     return 0
 
