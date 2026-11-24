@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { TasksPage } from "./TasksPage";
 import { useTaskQueue, useTaskQueueStatus } from "../lib/queries/runtime";
 import { useAgents } from "../lib/queries/agents";
+import { useSetAgentsPaused } from "../lib/mutations/agents";
 import { useFullConfig } from "../lib/queries/config";
 import {
   useCreateTask,
@@ -22,6 +23,8 @@ vi.mock("../lib/queries/runtime", () => ({
 vi.mock("../lib/queries/agents", () => ({
   useAgents: vi.fn(),
 }));
+
+vi.mock("../lib/mutations/agents", () => ({ useSetAgentsPaused: vi.fn() }));
 
 vi.mock("../lib/queries/config", () => ({ useFullConfig: vi.fn() }));
 
@@ -142,6 +145,7 @@ function setQueryDefaults() {
 }
 
 function setMutationDefaults() {
+  m(useSetAgentsPaused).mockReturnValue(makeMutation());
   useCreateTaskMock.mockReturnValue(makeMutation());
   useUpdateTaskStatusMock.mockReturnValue(makeMutation());
   useDeleteTaskMock.mockReturnValue(makeMutation());
@@ -178,6 +182,22 @@ describe("TasksPage", () => {
     vi.clearAllMocks();
     setQueryDefaults();
     setMutationDefaults();
+  });
+
+  it("pauses running agents and leaves individually paused agents alone", () => {
+    const mutate = vi.fn();
+    m(useSetAgentsPaused).mockReturnValue(makeMutation({ mutate }));
+    useAgentsMock.mockReturnValue(makeQuery([
+      { ...SAMPLE_AGENTS[0], state: "running" },
+      { ...SAMPLE_AGENTS[1], state: "suspended" },
+    ]));
+    renderPage();
+    fireEvent.click(screen.getByRole("button", { name: "tasks.pause_agents" }));
+    fireEvent.click(screen.getByRole("button", { name: "tasks.pause_agents_confirm" }));
+    expect(mutate).toHaveBeenCalledWith(
+      { paused: true, agentIds: [ALPHA_ID] },
+      expect.any(Object),
+    );
   });
 
   it("shows the selected agent and task from the latest scheduler evaluation", () => {

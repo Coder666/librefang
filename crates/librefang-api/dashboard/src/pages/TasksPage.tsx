@@ -12,6 +12,8 @@ import {
   AlertTriangle,
   CheckCircle2,
   Loader2,
+  Pause,
+  Play,
 } from "lucide-react";
 import { PageHeader } from "../components/ui/PageHeader";
 import { Card } from "../components/ui/Card";
@@ -20,6 +22,7 @@ import { Button } from "../components/ui/Button";
 import { Modal } from "../components/ui/Modal";
 import { useTaskQueue } from "../lib/queries/runtime";
 import { useAgents } from "../lib/queries/agents";
+import { useSetAgentsPaused } from "../lib/mutations/agents";
 import { useFullConfig } from "../lib/queries/config";
 import {
   useCreateTask,
@@ -675,6 +678,74 @@ function TaskSchedulerPanel({ agentsById, tasks }: {
   );
 }
 
+function AgentPauseControls({ agents }: { agents: AgentItem[] }) {
+  const { t } = useTranslation();
+  const pauseMutation = useSetAgentsPaused();
+  const [action, setAction] = useState<boolean | null>(null);
+  const [failureCount, setFailureCount] = useState(0);
+  const suspended = agents.filter((agent) => agent.state?.toLowerCase() === "suspended");
+  const running = agents.filter((agent) => agent.state?.toLowerCase() === "running");
+  const setPaused = (paused: boolean) => {
+    setFailureCount(0);
+    pauseMutation.mutate({
+      paused,
+      agentIds: (paused ? running : suspended).map((agent) => agent.id),
+    }, {
+      onSuccess: setFailureCount,
+      onSettled: () => setAction(null),
+    });
+  };
+
+  if (!running.length && !suspended.length && !pauseMutation.isPending && !failureCount) return null;
+
+  return (
+    <div className="flex flex-wrap items-center gap-3 rounded-xl border border-border-subtle bg-surface p-3">
+      <div className="mr-auto">
+        <p className="text-sm font-semibold">{t("tasks.agent_execution", { defaultValue: "Agent execution" })}</p>
+        <p className="text-xs text-text-dim" role="status">
+          {t("tasks.agent_pause_count", {
+            defaultValue: "{{running}} running · {{suspended}} paused",
+            running: running.length,
+            suspended: suspended.length,
+          })}
+        </p>
+        {failureCount > 0 && (
+          <p className="text-sm text-error" role="alert">
+            {t("tasks.agent_pause_failed", { defaultValue: "Could not change the state of {{count}} agents.", count: failureCount })}
+          </p>
+        )}
+      </div>
+      {running.length > 0 && (
+        <Button variant="secondary" size="sm" disabled={pauseMutation.isPending} onClick={() => setAction(true)} leftIcon={<Pause className="h-4 w-4" />}>
+          {t("tasks.pause_agents", { defaultValue: "Pause agents" })}
+        </Button>
+      )}
+      {suspended.length > 0 && (
+        <Button variant="secondary" size="sm" disabled={pauseMutation.isPending} onClick={() => setAction(false)} leftIcon={<Play className="h-4 w-4" />}>
+          {t("tasks.resume_agents", { defaultValue: "Resume agents" })}
+        </Button>
+      )}
+      <Modal
+        isOpen={action !== null}
+        onClose={() => { if (!pauseMutation.isPending) setAction(null); }}
+        title={action ? t("tasks.pause_agents", { defaultValue: "Pause agents" }) : t("tasks.resume_agents", { defaultValue: "Resume agents" })}
+      >
+        <p className="text-sm text-text-dim">
+          {action
+            ? t("tasks.pause_agents_help", { defaultValue: "Pause every running agent and interrupt any active turns. The dashboard and task board stay available." })
+            : t("tasks.resume_agents_help", { defaultValue: "Resume every paused agent, including agents paused individually." })}
+        </p>
+        <div className="mt-4 flex justify-end gap-2">
+          <Button variant="secondary" disabled={pauseMutation.isPending} onClick={() => setAction(null)}>{t("common.cancel")}</Button>
+          <Button isLoading={pauseMutation.isPending} onClick={() => { if (action !== null) setPaused(action); }}>
+            {action ? t("tasks.pause_agents_confirm", { defaultValue: "Pause running agents" }) : t("tasks.resume_agents_confirm", { defaultValue: "Resume paused agents" })}
+          </Button>
+        </div>
+      </Modal>
+    </div>
+  );
+}
+
 export function TasksPage() {
   const { t } = useTranslation();
   const addToast = useUIStore((s) => s.addToast);
@@ -775,6 +846,7 @@ export function TasksPage() {
         helpText={t("tasks.help")}
       />
 
+      <AgentPauseControls agents={agents} />
       <TaskSchedulerPanel agentsById={agentsById} tasks={validTasks} />
 
       {/* ── Status summary bar ── */}
