@@ -1451,11 +1451,11 @@ impl MemorySubstrate {
             // via the API or bridge tools may store the name rather than the UUID),
             // plus any unassigned (empty assigned_to) pending tasks.
             let mut stmt = db.prepare(
-                "SELECT id, title, description, assigned_to, created_by, created_at, priority
+                "SELECT id, title, description, assigned_to, created_by, created_at, priority, status, claimed_at
                  FROM task_queue
-                 WHERE status = 'pending'
-                   AND (assigned_to = ?1 OR assigned_to = ?2 OR assigned_to = '')
-                 ORDER BY priority DESC, created_at ASC
+                 WHERE (status = 'in_progress' AND assigned_to = ?1)
+                    OR (status = 'pending' AND (assigned_to = ?1 OR assigned_to = ?2 OR assigned_to = ''))
+                 ORDER BY (status = 'in_progress') DESC, claimed_at ASC, priority DESC, created_at ASC
                  LIMIT 1"
             ).map_err(LibreFangError::memory)?;
 
@@ -1479,25 +1479,32 @@ impl MemorySubstrate {
                         row.get::<_, String>(4)?,
                         row.get::<_, String>(5)?,
                         row.get::<_, i64>(6).unwrap_or(0),
+                        row.get::<_, String>(7)?,
+                        row.get::<_, Option<String>>(8)?,
                     ))
                 });
 
                 match result {
-                    Ok((id, title, description, _assigned, created_by, created_at, priority)) => {
-                        // Stamp `claimed_at` so the stuck-task sweeper can
-                        // TTL-reset workers that never complete.
-                        let claimed_at = chrono::Utc::now().to_rfc3339();
-                        // Atomic compare-and-swap: only flip the row if it is
-                        // still 'pending'. A 0-row result means another claimant
-                        // won this row between our SELECT and UPDATE — loop to
-                        // try the next pending task instead of giving up.
-                        let rows = db.execute(
-                            "UPDATE task_queue SET status = 'in_progress', assigned_to = ?2, claimed_at = ?3 WHERE id = ?1 AND status = 'pending'",
-                            rusqlite::params![id, agent_id, claimed_at],
-                        ).map_err(LibreFangError::memory)?;
-                        if rows == 0 {
-                            continue;
-                        }
+                    Ok((id, title, description, _assigned, created_by, created_at, priority, status, existing_claim)) => {
+                        let resumed = status == "in_progress";
+                        let claimed_at = if resumed {
+                            existing_claim
+                        } else {
+                            let claimed_at = chrono::Utc::now().to_rfc3339();
+                            // Recheck ownership inside the write to close the
+                            // race between simultaneous claims by this worker.
+                            let rows = db.execute(
+                                "UPDATE task_queue SET status = 'in_progress', assigned_to = ?2, claimed_at = ?3
+                                 WHERE id = ?1 AND status = 'pending'
+                                   AND NOT EXISTS (SELECT 1 FROM task_queue
+                                       WHERE status = 'in_progress' AND assigned_to = ?2)",
+                                rusqlite::params![id, agent_id, claimed_at],
+                            ).map_err(LibreFangError::memory)?;
+                            if rows == 0 {
+                                continue;
+                            }
+                            Some(claimed_at)
+                        };
 
                         return Ok(Some(serde_json::json!({
                             "id": id,
@@ -1509,6 +1516,7 @@ impl MemorySubstrate {
                             "created_at": created_at,
                             "claimed_at": claimed_at,
                             "priority": priority,
+                            "resumed": resumed,
                         })));
                     }
                     // No pending task assignable to this agent remains.
@@ -3186,6 +3194,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_task_claim_resumes_existing_claim_without_consuming_pending_work() {
+        let substrate = MemorySubstrate::open_in_memory(0.1).unwrap();
+        for title in ["first", "second"] {
+            substrate
+                .task_post(title, "", Some("coder"), None, 0, None, TaskQueueCaps::UNLIMITED)
+                .await
+                .unwrap();
+        }
+        let first = substrate.task_claim("coder", None).await.unwrap().unwrap();
+        let resumed = substrate.task_claim("coder", None).await.unwrap().unwrap();
+        assert_eq!(resumed["id"], first["id"]);
+        assert_eq!(resumed["claimed_at"], first["claimed_at"]);
+        assert_eq!(resumed["resumed"], true);
+        assert_eq!(substrate.task_list(Some("pending")).await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
     async fn test_task_claim_empty() {
         let substrate = MemorySubstrate::open_in_memory(0.1).unwrap();
         let claimed = substrate.task_claim("nobody", None).await.unwrap();
@@ -3198,7 +3223,7 @@ mod tests {
     /// both SELECT the same row under SQLite's snapshot and both UPDATE by id,
     /// so both returned `Ok(Some(task))` — the same task claimed twice. The fix
     /// gates the UPDATE on `status = 'pending'` (atomic compare-and-swap) and
-    /// returns `Ok(None)` when 0 rows change, so only one claimant wins.
+    /// only the successful update creates a claim. Other calls resume that claim.
     ///
     /// File-backed DB so WAL + multi-connection pool exercise real concurrent
     /// writers; `open_in_memory` is max_size=1 and serialises on its single
@@ -3234,25 +3259,18 @@ mod tests {
             })
             .collect();
 
-        let mut claimed_count = 0;
-        let mut none_count = 0;
-        for h in handles {
-            match h.await.expect("join task").expect("task_claim Ok") {
-                Some(_) => claimed_count += 1,
-                None => none_count += 1,
+        let mut fresh = 0;
+        let mut resumed = 0;
+        for handle in handles {
+            let task = handle.await.unwrap().unwrap().unwrap();
+            if task["resumed"] == true {
+                resumed += 1;
+            } else {
+                fresh += 1;
             }
         }
-
-        assert_eq!(
-            claimed_count, 1,
-            "exactly one claimant must win the single pending task, but {} won (#5961)",
-            claimed_count,
-        );
-        assert_eq!(
-            none_count, 7,
-            "all losing claimants must observe Ok(None), but {} did (#5961)",
-            none_count,
-        );
+        assert_eq!(fresh, 1);
+        assert_eq!(resumed, 7);
     }
 
     /// With as many pending tasks as concurrent claimants, every claimant must
@@ -3275,14 +3293,14 @@ mod tests {
         let db_path = dir.path().join("task_claim_distinct.db");
         let substrate = StdArc::new(MemorySubstrate::open(&db_path, 0.1).unwrap());
 
-        // As many pending tasks as claimants, all assignable to "worker".
+        // As many pending tasks as claimants, available to any worker.
         const N: usize = 8;
         for i in 0..N {
             substrate
                 .task_post(
                     &format!("task-{i}"),
                     "claim me",
-                    Some("worker"),
+                    None,
                     None,
                     0,
                     None,
@@ -3294,9 +3312,9 @@ mod tests {
 
         // Fire N concurrent claimants; each must claim one distinct task.
         let handles: Vec<_> = (0..N)
-            .map(|_| {
+            .map(|i| {
                 let s = StdArc::clone(&substrate);
-                tokio::spawn(async move { s.task_claim("worker", Some("worker")).await })
+                tokio::spawn(async move { s.task_claim(&format!("worker-{i}"), None).await })
             })
             .collect();
 

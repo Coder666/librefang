@@ -20,17 +20,13 @@ use super::*;
 /// Compiled in rather than configurable: it is the fallback for an installation that declared nothing, so it has to work with no setup at all.
 /// An operator who wants different wording writes their own trigger, which then takes precedence.
 ///
-/// The three-claim cap is deliberate and not arbitrary politeness.
-/// `task_claim` takes no arguments, so "drain until empty" issues byte-identical calls, and `librefang-runtime::loop_guard` blocks a tool after `block_threshold` (5) identical calls — or sooner, at `outcome_block_threshold` (3) identical results, which an empty board produces immediately.
-/// An unbounded drain therefore ends in blocked tool calls rather than an empty queue.
-/// Three claims stay clear of both limits, and since every post wakes the assignee again, a deeper backlog still drains — one wake per task, which is the accounting this fix is built on.
 const ASSIGNEE_WAKE_PROMPT: &str = "[TASK BOARD] Task {task_id} was assigned to you: \"{title}\".
 
 Claim it with `task_claim`, do the work, then record the outcome with `task_complete(task_id, result)`.
 
 `task_claim` returns the next task assigned to you, or nothing when there is none left.
 If it returns nothing, stop immediately — do not call it again.
-Claim at most 3 tasks in this activation; anything still queued is picked up on your next wake.";
+Call task_claim once. Resume the returned task if it is already active. Work on that task only.";
 
 /// Prompt for the level-triggered reconcile wake (issue #6728).
 ///
@@ -42,7 +38,7 @@ Claim with `task_claim`, do the work, then record the outcome with `task_complet
 
 `task_claim` returns the next task assigned to you, or nothing when there is none left.
 If it returns nothing, stop immediately — do not call it again.
-Claim at most 3 tasks in this activation; anything still queued is picked up on your next wake.";
+Call task_claim once. Resume the returned task if it is already active. Work on that task only.";
 
 /// Whether `task_claim` actually reaches this agent, deciding whether waking it can accomplish anything.
 ///

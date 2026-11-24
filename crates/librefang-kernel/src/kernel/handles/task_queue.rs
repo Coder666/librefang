@@ -116,7 +116,7 @@ impl kernel_handle::TaskQueue for LibreFangKernel {
             .await
             .map_err(|e| KernelOpError::Internal(format!("Task claim failed: {e}")))?;
 
-        if let Some(ref task) = result {
+        if let Some(task) = result.as_ref().filter(|task| task["resumed"] != true) {
             let task_id = task["id"].as_str().unwrap_or("").to_string();
             // The claimed task record carries the original poster so
             // `TaskClaimed` triggers can scope via `creator_match`. The
