@@ -165,6 +165,21 @@ export function useSuspendAgent() {
   });
 }
 
+export function useSetAgentsPaused() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ agentIds, paused }: { agentIds: string[]; paused: boolean }) => {
+      const update = paused ? suspendAgent : resumeAgent;
+      const attempts = await Promise.allSettled(agentIds.map((id) => update(id)));
+      return attempts.filter((attempt) => attempt.status === "rejected").length;
+    },
+    onSettled: () => Promise.all([
+      qc.invalidateQueries({ queryKey: agentKeys.lists() }),
+      qc.invalidateQueries({ queryKey: overviewKeys.snapshot() }),
+    ]),
+  });
+}
+
 export function useDeleteAgent() {
   const qc = useQueryClient();
   return useMutation({
