@@ -193,6 +193,25 @@ describe("TasksPage", () => {
       expect(screen.getByText("Failed task")).toBeInTheDocument();
     });
 
+    it("shows recorded task activity and waits for an agent result", () => {
+      useTaskQueueMock.mockReturnValue(makeQuery({
+        tasks: SAMPLE_TASKS.map((task) => ({
+          ...task,
+          ...(task.status === "in_progress" ? { retry_count: 2 } : {}),
+          ...(task.status === "completed" ? {
+            claimed_at: null,
+            completed_at: new Date(Date.now() - 420_000).toISOString(),
+          } : {}),
+        })),
+      }));
+      renderPage();
+      expect(screen.getByText("tasks.created_age")).toBeInTheDocument();
+      expect(screen.getByText("tasks.claim_age")).toBeInTheDocument();
+      expect(screen.getByText("tasks.retries_count")).toBeInTheDocument();
+      expect(screen.getByText("tasks.awaiting_result")).toBeInTheDocument();
+      expect(screen.getByText("tasks.completed_age")).toBeInTheDocument();
+    });
+
     it("shows task description in the card", () => {
       renderPage();
       expect(screen.getByText("Pending task description")).toBeInTheDocument();
