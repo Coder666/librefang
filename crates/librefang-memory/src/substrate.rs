@@ -1717,7 +1717,7 @@ impl MemorySubstrate {
                 ),
             };
             let sql = format!(
-                "SELECT id, title, description, status, assigned_to, created_by, created_at, completed_at, result, claimed_at, priority, timeout_secs FROM task_queue{where_sql} ORDER BY created_at DESC{window}"
+                "SELECT id, title, description, status, assigned_to, created_by, created_at, completed_at, result, claimed_at, priority, timeout_secs, COALESCE(retry_count, 0) FROM task_queue{where_sql} ORDER BY created_at DESC{window}"
             );
 
             let mut stmt = db.prepare(&sql).map_err(LibreFangError::memory)?;
@@ -1735,6 +1735,7 @@ impl MemorySubstrate {
                     "claimed_at": row.get::<_, Option<String>>(9).unwrap_or(None),
                     "priority": row.get::<_, i64>(10).unwrap_or(0),
                     "timeout_secs": row.get::<_, Option<u32>>(11).unwrap_or(None),
+                    "retry_count": row.get::<_, u32>(12).unwrap_or(0),
                 }))
             }).map_err(LibreFangError::memory)?;
 
@@ -3430,6 +3431,7 @@ mod tests {
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0]["id"], task_id);
         assert_eq!(pending[0]["assigned_to"], "");
+        assert_eq!(pending[0]["retry_count"], 1);
         assert!(
             pending[0]["claimed_at"].is_null(),
             "claimed_at must be cleared on auto-reset"

@@ -73,9 +73,10 @@ function taskMatchesAgent(
   return agentsById.get(agentId)?.name === raw;
 }
 
-function relativeTime(iso?: string): string {
-  if (!iso) return "-";
-  const diff = Date.now() - new Date(iso).getTime();
+function elapsedTime(start?: string | null): string | undefined {
+  if (!start) return undefined;
+  const diff = Date.now() - Date.parse(start);
+  if (!Number.isFinite(diff) || diff < 0) return undefined;
   const mins = Math.floor(diff / 60_000);
   if (mins < 1) return "<1m";
   if (mins < 60) return `${mins}m`;
@@ -135,6 +136,9 @@ function TaskCard({ task, isDragTarget, onDragStart, agentsById }: TaskCardProps
   }
 
   const isBusy = deleteMutation.isPending || retryMutation.isPending || updateMutation.isPending;
+  const createdAge = task.status === "pending" ? elapsedTime(task.created_at) : undefined;
+  const claimAge = task.status === "in_progress" ? elapsedTime(task.claimed_at) : undefined;
+  const completedAge = task.status === "completed" ? elapsedTime(task.completed_at) : undefined;
 
   return (
     <div
@@ -216,10 +220,32 @@ function TaskCard({ task, isDragTarget, onDragStart, agentsById }: TaskCardProps
               : t("tasks.timeout_badge", { secs: task.timeout_secs })}
           </span>
         )}
-        <span className="ml-auto flex items-center gap-1 text-[10px] text-text-dim/50 shrink-0">
-          <Clock className="w-2.5 h-2.5" />
-          {relativeTime(task.created_at)}
-        </span>
+      </div>
+
+      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-text-dim">
+        {createdAge && task.created_at && (
+          <span className="flex items-center gap-1" title={new Date(task.created_at).toLocaleString()}>
+            <Clock aria-hidden="true" className="h-3 w-3" />
+            {t("tasks.created_age", { defaultValue: "Created {{duration}} ago", duration: createdAge })}
+          </span>
+        )}
+        {claimAge && task.claimed_at && (
+          <span className="flex items-center gap-1" title={new Date(task.claimed_at).toLocaleString()}>
+            <Clock aria-hidden="true" className="h-3 w-3" />
+            {t("tasks.claim_age", { defaultValue: "Claimed {{duration}} ago", duration: claimAge })}
+          </span>
+        )}
+        {completedAge && task.completed_at && (
+          <span title={new Date(task.completed_at).toLocaleString()}>
+            {t("tasks.completed_age", { defaultValue: "Completed {{duration}} ago", duration: completedAge })}
+          </span>
+        )}
+        {task.retry_count != null && task.retry_count > 0 && (
+          <span>{t("tasks.retries_count", { defaultValue: "{{count}} automatic retries", count: task.retry_count })}</span>
+        )}
+        {task.status === "in_progress" && !task.result && (
+          <span>{t("tasks.awaiting_result", { defaultValue: "Awaiting result" })}</span>
+        )}
       </div>
 
       {/* Action buttons */}

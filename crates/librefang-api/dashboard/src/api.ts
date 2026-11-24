@@ -4116,9 +4116,10 @@ export interface TaskQueueItem {
   description?: string;
   assigned_to?: string;
   created_by?: string;
-  completed_at?: string;
+  completed_at?: string | null;
   result?: string;
-  claimed_at?: string;
+  claimed_at?: string | null;
+  retry_count?: number;
   priority?: number;
   timeout_secs?: number;
   [key: string]: unknown;
