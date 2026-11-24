@@ -978,8 +978,15 @@ impl LibreFangKernel {
                 }
                 None => Err("task status counts unavailable".to_string()),
             };
-            match decision {
-                Ok(selected) => matches = selected,
+            let outcome = match decision {
+                Ok(selected) => {
+                    matches = selected;
+                    if matches.is_empty() {
+                        "held"
+                    } else {
+                        "selected"
+                    }
+                }
                 Err(error) => {
                     warn!(%error, "Task board scheduler plugin failed");
                     matches =
@@ -988,8 +995,29 @@ impl LibreFangKernel {
                         } else {
                             builtin_matches.clone()
                         };
+                    if matches.is_empty() {
+                        "failed_suppressed"
+                    } else {
+                        "failed_builtin"
+                    }
                 }
-            }
+            };
+            let selected = matches
+                .iter()
+                .filter_map(|matched| match &matched.source {
+                    TriggerMatchSource::TaskBoardAssigneeWake { task_id } => {
+                        Some((matched.agent_id, task_id.clone()))
+                    }
+                    TriggerMatchSource::Registered(_) => None,
+                })
+                .collect();
+            *self.governance.latest_scheduler_sweep.write() =
+                Some(super::subsystems::governance::TaskSchedulerSweep {
+                    evaluated_at: now,
+                    candidate_count: builtin_matches.len(),
+                    selected,
+                    outcome,
+                });
 
             // A suppressed candidate was not actually woken. Remove the
             // provisional backoff entry so a later scheduler cycle may

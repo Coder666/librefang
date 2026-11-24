@@ -15,7 +15,12 @@ use super::*;
 pub async fn get_config(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let config = state.kernel.config_ref();
     let budget = state.kernel.budget_config();
-    Json(redacted_config_json(&config, &budget))
+    let mut json = redacted_config_json(&config, &budget);
+    if config.task_board.scheduler_plugin.is_some() {
+        json["task_board"]["latest_scheduler_sweep"] =
+            serde_json::json!(state.kernel.latest_task_scheduler_sweep());
+    }
+    Json(json)
 }
 
 fn redact_url_map_credentials(
@@ -944,6 +949,10 @@ fn redacted_config_json(
         "assignee_wake": config.task_board.assignee_wake,
         "pending_grace_secs": config.task_board.pending_grace_secs,
         "wake_backoff_max_secs": config.task_board.wake_backoff_max_secs,
+        "scheduler_plugin": config.task_board.scheduler_plugin.as_ref().map(|plugin| serde_json::json!({
+            "timeout_secs": plugin.timeout_secs,
+            "on_failure": plugin.on_failure,
+        })),
     });
 
     // ── tool_policy (rules + groups, no secrets) ──

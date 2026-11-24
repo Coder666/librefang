@@ -38,6 +38,15 @@ pub(crate) struct AssigneeWakeState {
     pub(crate) woken_for: BTreeSet<String>,
 }
 
+/// Operator-facing record of an external scheduler evaluation.
+#[derive(Clone, serde::Serialize)]
+pub struct TaskSchedulerSweep {
+    pub evaluated_at: DateTime<Utc>,
+    pub candidate_count: usize,
+    pub selected: Vec<(AgentId, String)>,
+    pub outcome: &'static str,
+}
+
 /// Focused approval + hooks API.
 pub trait GovernanceSubsystemApi: Send + Sync {
     /// Approval enforcement manager.
@@ -65,6 +74,7 @@ pub struct GovernanceSubsystem {
     ///
     /// Deliberately in-memory: losing it on restart costs one extra wake per backlogged agent, which is cheaper than a schema migration and cannot lose work in either direction.
     pub(crate) assignee_wake_state: DashMap<AgentId, AssigneeWakeState>,
+    pub(crate) latest_scheduler_sweep: parking_lot::RwLock<Option<TaskSchedulerSweep>>,
 }
 
 impl GovernanceSubsystem {
@@ -78,6 +88,7 @@ impl GovernanceSubsystem {
             external_hooks,
             approval_sweep_started: AtomicBool::new(false),
             task_board_sweep_started: AtomicBool::new(false),
+            latest_scheduler_sweep: parking_lot::RwLock::new(None),
             assignee_wake_state: DashMap::new(),
         }
     }

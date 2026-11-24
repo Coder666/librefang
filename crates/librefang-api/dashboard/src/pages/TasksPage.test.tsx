@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { TasksPage } from "./TasksPage";
 import { useTaskQueue, useTaskQueueStatus } from "../lib/queries/runtime";
 import { useAgents } from "../lib/queries/agents";
+import { useFullConfig } from "../lib/queries/config";
 import {
   useCreateTask,
   useUpdateTaskStatus,
@@ -21,6 +22,8 @@ vi.mock("../lib/queries/runtime", () => ({
 vi.mock("../lib/queries/agents", () => ({
   useAgents: vi.fn(),
 }));
+
+vi.mock("../lib/queries/config", () => ({ useFullConfig: vi.fn() }));
 
 vi.mock("../lib/mutations/runtime", () => ({
   useCreateTask: vi.fn(),
@@ -135,6 +138,7 @@ function setQueryDefaults() {
   useTaskQueueMock.mockReturnValue(makeQuery({ tasks: SAMPLE_TASKS, total: SAMPLE_TASKS.length }));
   useTaskQueueStatusMock.mockReturnValue(makeQuery(SAMPLE_STATUS));
   useAgentsMock.mockReturnValue(makeQuery(SAMPLE_AGENTS));
+  m(useFullConfig).mockReturnValue(makeQuery(undefined));
 }
 
 function setMutationDefaults() {
@@ -174,6 +178,24 @@ describe("TasksPage", () => {
     vi.clearAllMocks();
     setQueryDefaults();
     setMutationDefaults();
+  });
+
+  it("shows the selected agent and task from the latest scheduler evaluation", () => {
+    m(useFullConfig).mockReturnValue(makeQuery({
+      task_board: {
+        scheduler_plugin: { timeout_secs: 30, on_failure: "builtin" },
+        latest_scheduler_sweep: {
+          evaluated_at: "2026-11-24T10:07:00Z",
+          candidate_count: 2,
+          selected: [[ALPHA_ID, "task-pending-1"]],
+          outcome: "selected",
+        },
+      },
+    }));
+    renderPage();
+    fireEvent.click(screen.getByText("tasks.scheduler_settings"));
+    expect(screen.getByText("tasks.scheduler_selected")).toBeInTheDocument();
+    expect(screen.getByText("agent-alpha · Pending task title")).toBeInTheDocument();
   });
 
   describe("column rendering", () => {

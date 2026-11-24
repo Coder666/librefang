@@ -1336,6 +1336,13 @@ fn resolve_notification_targets(
 }
 
 impl LibreFangKernel {
+    /// Most recent external scheduler evaluation since daemon startup.
+    pub fn latest_task_scheduler_sweep(
+        &self,
+    ) -> Option<subsystems::governance::TaskSchedulerSweep> {
+        self.governance.latest_scheduler_sweep.read().clone()
+    }
+
     /// Mark all active Hands' cron jobs as due-now so the next scheduler tick fires them.
     /// Called after a provider is first configured so Hands resume immediately.
     /// Update legacy concrete registry entries that should track the kernel default model.

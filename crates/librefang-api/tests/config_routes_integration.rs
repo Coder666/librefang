@@ -189,12 +189,44 @@ async fn get_config_returns_redacted_view() {
     let json: serde_json::Value = serde_json::from_slice(&body).expect("response is JSON");
     // Spot-check some fields the redacted view always includes.
     assert!(json.is_object(), "expected object, got {json}");
+    assert_eq!(
+        json["task_board"].get("scheduler_plugin"),
+        Some(&serde_json::Value::Null)
+    );
     for key in ["channels", "mcp_servers", "fallback_providers"] {
         assert!(
             json.get(key).is_some(),
             "missing redacted field '{key}' in /api/config response: {json}"
         );
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn get_config_exposes_scheduler_status_without_command_arguments() {
+    use librefang_types::config::{TaskSchedulerPluginConfig, TaskSchedulerPluginFailureMode};
+
+    let h = boot_router_with_config(API_KEY, |config| {
+        config.task_board.scheduler_plugin = Some(TaskSchedulerPluginConfig {
+            command: "policy".to_string(),
+            args: vec!["private-argument".to_string()],
+            timeout_secs: 25,
+            on_failure: TaskSchedulerPluginFailureMode::Suppress,
+            ..TaskSchedulerPluginConfig::default()
+        });
+    })
+    .await;
+    let (status, body) = send(h.app.clone(), auth_get("/api/config")).await;
+    assert_eq!(status, StatusCode::OK);
+    let json: serde_json::Value = serde_json::from_slice(&body).expect("response is JSON");
+    let task_board = &json["task_board"];
+    assert_eq!(
+        task_board["scheduler_plugin"],
+        serde_json::json!({ "timeout_secs": 25, "on_failure": "suppress" })
+    );
+    assert_eq!(
+        task_board.get("latest_scheduler_sweep"),
+        Some(&serde_json::Value::Null)
+    );
 }
 
 /// Walk a dotted path through a JSON body.

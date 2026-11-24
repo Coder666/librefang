@@ -225,6 +225,14 @@ pub trait KernelApi: KernelHandle + Send + Sync {
     // (model catalog, MCP wiring, event bus, …).
     fn command_queue_ref(&self) -> &librefang_runtime::command_lane::CommandQueue;
     fn config_ref(&self) -> arc_swap::Guard<Arc<KernelConfig>>;
+
+    /// Most recent external task scheduler evaluation since startup.
+    fn latest_task_scheduler_sweep(
+        &self,
+    ) -> Option<crate::kernel::subsystems::governance::TaskSchedulerSweep> {
+        None
+    }
+
     fn config_snapshot(&self) -> Arc<KernelConfig>;
     fn context_engine_ref(&self) -> Option<&dyn librefang_runtime::context_engine::ContextEngine>;
     fn default_model_override_ref(
@@ -1139,6 +1147,12 @@ impl KernelApi for LibreFangKernel {
     fn command_queue_ref(&self) -> &librefang_runtime::command_lane::CommandQueue {
         <Self as crate::WorkflowSubsystemApi>::command_queue_ref(self)
     }
+    fn latest_task_scheduler_sweep(
+        &self,
+    ) -> Option<crate::kernel::subsystems::governance::TaskSchedulerSweep> {
+        Self::latest_task_scheduler_sweep(self)
+    }
+
     fn config_ref(&self) -> arc_swap::Guard<Arc<KernelConfig>> {
         Self::config_ref(self)
     }

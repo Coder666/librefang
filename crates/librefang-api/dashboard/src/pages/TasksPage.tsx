@@ -20,6 +20,7 @@ import { Button } from "../components/ui/Button";
 import { Modal } from "../components/ui/Modal";
 import { useTaskQueue } from "../lib/queries/runtime";
 import { useAgents } from "../lib/queries/agents";
+import { useFullConfig } from "../lib/queries/config";
 import {
   useCreateTask,
   useUpdateTaskStatus,
@@ -543,6 +544,99 @@ function NewTaskModal({ isOpen, onClose, agents }: NewTaskModalProps) {
 // TasksPage (main export)
 // ────────────────────────────────────────────────────────────────────────────
 
+interface TaskBoardConfig {
+  scheduler_plugin?: {
+    timeout_secs?: number;
+    on_failure?: "builtin" | "suppress";
+  } | null;
+  latest_scheduler_sweep?: {
+    evaluated_at: string;
+    candidate_count: number;
+    selected: [agentId: string, taskId: string][];
+    outcome: "held" | "selected" | "failed_suppressed" | "failed_builtin";
+  } | null;
+  sweep_interval_secs?: number;
+  pending_grace_secs?: number;
+}
+
+function TaskSchedulerPanel({ agentsById, tasks }: {
+  agentsById: Map<string, AgentItem>;
+  tasks: TaskQueueItem[];
+}) {
+  const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
+  const config = useFullConfig({ enabled: open, staleTime: 0, refetchInterval: open ? 30_000 : false });
+  const board = config.data?.task_board as TaskBoardConfig | undefined;
+  const plugin = board?.scheduler_plugin;
+  const reportsPlugin = board && "scheduler_plugin" in board;
+  const sweep = board?.latest_scheduler_sweep;
+  const outcomes = {
+    held: t("tasks.scheduler_held", { defaultValue: "Plugin selected no wakes" }),
+    selected: t("tasks.scheduler_selected", { defaultValue: "Plugin selected wakes" }),
+    failed_suppressed: t("tasks.scheduler_failed_suppressed", { defaultValue: "Plugin failed and the sweep was skipped" }),
+    failed_builtin: t("tasks.scheduler_failed_builtin", { defaultValue: "Plugin failed and the built-in scheduler selected wakes" }),
+  };
+
+  return (
+    <details onToggle={(event) => setOpen(event.currentTarget.open)} className="rounded-xl border border-border-subtle bg-surface p-3 text-sm">
+      <summary className="cursor-pointer font-semibold">
+        {t("tasks.scheduler_settings", { defaultValue: "Task scheduler settings" })}
+      </summary>
+      {!board ? (
+        <p className="mt-2 text-text-dim">
+          {(!open || config.isLoading)
+            ? t("common.loading")
+            : t("tasks.scheduler_unavailable", { defaultValue: "Scheduler configuration unavailable." })}
+        </p>
+      ) : (
+        <dl className="mt-2 grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1">
+          <dt>{t("tasks.scheduler_policy", { defaultValue: "Policy" })}</dt>
+          <dd>{plugin
+            ? t("tasks.scheduler_external", { defaultValue: "External scheduler plugin" })
+            : reportsPlugin
+              ? t("tasks.scheduler_builtin", { defaultValue: "Built-in scheduler" })
+              : t("tasks.scheduler_policy_unreported", { defaultValue: "The server does not report the scheduler policy." })}</dd>
+          {plugin && (
+            <>
+              <dt>{t("tasks.scheduler_timeout", { defaultValue: "Plugin timeout (seconds)" })}</dt>
+              <dd>{plugin.timeout_secs}</dd>
+              <dt>{t("tasks.scheduler_failure", { defaultValue: "If the plugin fails" })}</dt>
+              <dd>{plugin.on_failure === "suppress"
+                ? t("tasks.scheduler_suppress", { defaultValue: "Skip the sweep" })
+                : t("tasks.scheduler_builtin", { defaultValue: "Built-in scheduler" })}</dd>
+            </>
+          )}
+          <dt>{t("tasks.scheduler_sweep", { defaultValue: "Sweep interval (seconds)" })}</dt>
+          <dd>{board.sweep_interval_secs}</dd>
+          <dt>{t("tasks.scheduler_grace", { defaultValue: "Pending grace period (seconds)" })}</dt>
+          <dd>{board.pending_grace_secs}</dd>
+          {plugin && (
+            <>
+              <dt>{t("tasks.scheduler_last_evaluation", { defaultValue: "Latest plugin evaluation" })}</dt>
+              <dd>
+                {sweep ? (
+                  <>
+                    <time dateTime={sweep.evaluated_at}>{new Date(sweep.evaluated_at).toLocaleString()}</time>
+                    <p>{outcomes[sweep.outcome]}</p>
+                    <p>{t("tasks.scheduler_candidates", { defaultValue: "Candidates: {{count}}", count: sweep.candidate_count })}</p>
+                    <ul>
+                      {sweep.selected.map(([agentId, taskId]) => (
+                        <li key={taskId}>
+                          {assigneeLabel(agentId, agentsById)} · {tasks.find((task) => task.id === taskId)?.title ?? taskId}
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                ) : t("tasks.scheduler_no_evaluation", { defaultValue: "Waiting for the first plugin evaluation." })}
+              </dd>
+            </>
+          )}
+        </dl>
+      )}
+    </details>
+  );
+}
+
 export function TasksPage() {
   const { t } = useTranslation();
   const addToast = useUIStore((s) => s.addToast);
@@ -642,6 +736,8 @@ export function TasksPage() {
         icon={<Kanban className="h-4 w-4" />}
         helpText={t("tasks.help")}
       />
+
+      <TaskSchedulerPanel agentsById={agentsById} tasks={validTasks} />
 
       {/* ── Status summary bar ── */}
       {summaryStats.length > 0 && (
