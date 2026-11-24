@@ -202,6 +202,8 @@ describe("TasksPage", () => {
       renderPage();
       // Multiple tasks are assigned to agent-alpha and agent-beta
       expect(screen.getAllByText("agent-alpha").length).toBeGreaterThan(0);
+      expect(screen.getAllByRole("link", { name: "tasks.open_agent_conversation" })[0])
+        .toHaveAttribute("href", `/dashboard/chat?agentId=${ALPHA_ID}`);
     });
 
     it("shows priority and timeout badges, and labels a zero timeout as never-reclaimed", () => {

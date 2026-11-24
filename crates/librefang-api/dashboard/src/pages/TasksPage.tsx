@@ -116,6 +116,10 @@ function TaskCard({ task, isDragTarget, onDragStart, agentsById }: TaskCardProps
 
   const id = task.id ?? "";
   const actions = allowedActions(task.status);
+  const assignee = task.assigned_to;
+  const agent = assignee
+    ? agentsById.get(assignee) ?? Array.from(agentsById.values()).find((item) => item.name === assignee)
+    : undefined;
 
   function handleAction(action: "requeue" | "cancel" | "retry" | "delete") {
     if (!id) return;
@@ -185,6 +189,14 @@ function TaskCard({ task, isDragTarget, onDragStart, agentsById }: TaskCardProps
           </span>
         ) : (
           <span className="text-[10px] text-text-dim/50 italic shrink-0">{t("tasks.unassigned")}</span>
+        )}
+        {agent && (
+          <a
+            href={`/dashboard/chat?agentId=${encodeURIComponent(agent.id)}`}
+            className="text-xs text-brand underline underline-offset-2"
+          >
+            {t("tasks.open_agent_conversation", { defaultValue: "Agent conversations" })}
+          </a>
         )}
         {task.created_by && (
           <span className="text-[10px] text-text-dim/50 shrink-0">
