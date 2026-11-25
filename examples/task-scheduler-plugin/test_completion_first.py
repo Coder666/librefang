@@ -7,6 +7,7 @@ from completion_first import (
     Policy,
     SchedulerState,
     decide,
+    load_policy,
     load_state,
     requires_split,
     rotate_after,
@@ -39,6 +40,15 @@ class CompletionFirstTests(unittest.TestCase):
             "status_counts": {"in_progress": active, "pending": len(candidates)},
             "candidates": candidates,
         }
+
+    def test_legacy_policy_defaults_to_a_bounded_hold(self):
+        sample = Path(__file__).with_name("completion-first.json")
+        config = json.loads(sample.read_text(encoding="utf-8"))
+        del config["unclaimed_wake_hold_secs"]
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "legacy.json"
+            path.write_text(json.dumps(config), encoding="utf-8")
+            self.assertEqual(load_policy(path).unclaimed_wake_hold_secs, 120)
 
     def test_active_limit_suppresses_new_wake(self):
         with tempfile.TemporaryDirectory() as root:
