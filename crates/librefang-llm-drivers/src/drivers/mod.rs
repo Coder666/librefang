@@ -915,6 +915,7 @@ pub fn create_driver(config: &DriverConfig) -> Result<Arc<dyn LlmDriver>, LlmErr
                 config.request_timeout_secs,
             )
             .with_emit_caller_trace_headers(config.emit_caller_trace_headers)
+            .with_max_retries(config.max_retries)
             // A custom provider's own name is the only statement of which runtime it is; `llamacpp` and its spellings opt into llama.cpp's samplers (#8290).
             .with_sampler_dialect(openai::LocalSamplerDialect::for_provider(provider)),
         ));
