@@ -206,6 +206,18 @@ describe("TasksPage", () => {
         .toHaveAttribute("href", `/dashboard/chat?agentId=${ALPHA_ID}`);
     });
 
+    it("links UUID assignments and skips unresolved assignees", () => {
+      useTaskQueueMock.mockReturnValue(makeQuery({
+        tasks: [
+          { ...SAMPLE_TASKS[0], assigned_to: ALPHA_ID },
+          { ...SAMPLE_TASKS[1], assigned_to: "former-agent" },
+        ],
+      }));
+      renderPage();
+      expect(screen.getByRole("link", { name: "tasks.open_agent_conversation" }))
+        .toHaveAttribute("href", `/dashboard/chat?agentId=${ALPHA_ID}`);
+    });
+
     it("shows priority and timeout badges, and labels a zero timeout as never-reclaimed", () => {
       useTaskQueueMock.mockReturnValue(
         makeQuery({
