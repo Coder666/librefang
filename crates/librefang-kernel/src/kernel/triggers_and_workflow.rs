@@ -451,6 +451,21 @@ impl LibreFangKernel {
                 let workflow_id = trigger_match.workflow_id.clone();
                 let source = trigger_match.source.clone();
 
+                // Keep quota-blocked task wakes out of the execution lane.
+                // Reconcile checks again on later ticks, so admission resumes
+                // after the usage window rolls over or the quota is changed.
+                if matches!(
+                    &source,
+                    crate::triggers::TriggerMatchSource::TaskBoardAssigneeWake { .. }
+                        | crate::triggers::TriggerMatchSource::TaskBoardSplit { .. }
+                ) && matches!(
+                    kernel.agents.scheduler.check_quota(aid),
+                    Err(librefang_types::error::LibreFangError::QuotaExceeded(_))
+                ) {
+                    debug!(agent_id = %aid, "Task board wake deferred until quota is available");
+                    continue;
+                }
+
                 // For workflow-dispatch triggers, skip the agent-registry lookup —
                 // the agent_id on the TriggerMatch is the trigger owner and is not
                 // the dispatch target. For agent-dispatch triggers, look up the
