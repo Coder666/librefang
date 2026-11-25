@@ -109,13 +109,14 @@ impl DriverCache {
         let key_hash = hex::encode(&digest[..16]);
 
         format!(
-            "{}|{}|{}|{}|{}|{}",
+            "{}|{}|{}|{}|{}|{}|{max_retries}",
             config.provider,
             key_hash,
             config.base_url.as_deref().unwrap_or(""),
             config.proxy_url.as_deref().unwrap_or(""),
             config.request_timeout_secs.unwrap_or(0),
-            format_args!("{}|{}", config.message_timeout_secs, config.max_retries),
+            config.message_timeout_secs,
+            max_retries = config.max_retries,
         )
     }
 }
