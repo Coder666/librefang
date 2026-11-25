@@ -173,9 +173,10 @@ export function useSetAgentsPaused() {
       const attempts = await Promise.allSettled(agentIds.map((id) => update(id)));
       return attempts.filter((attempt) => attempt.status === "rejected").length;
     },
-    onSettled: () => Promise.all([
+    onSettled: (_result, _error, { agentIds }) => Promise.all([
       qc.invalidateQueries({ queryKey: agentKeys.lists() }),
       qc.invalidateQueries({ queryKey: overviewKeys.snapshot() }),
+      ...agentIds.map((id) => qc.invalidateQueries({ queryKey: agentKeys.detail(id) })),
     ]),
   });
 }
