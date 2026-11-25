@@ -6854,6 +6854,32 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn configured_provider_read_timeout_bounds_wait_for_headers() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (_socket, _) = listener.accept().await.unwrap();
+            std::future::pending::<()>().await;
+        });
+        let driver = OpenAIDriver::with_proxy_and_timeout(
+            String::new(),
+            format!("http://{address}"),
+            None,
+            Some(1),
+        )
+        .with_max_retries(0);
+        let mut request = transport_retry_request();
+        request.timeout_secs = Some(30);
+        let outcome =
+            tokio::time::timeout(std::time::Duration::from_secs(5), driver.complete(request)).await;
+        server.abort();
+        assert!(
+            matches!(outcome, Ok(Err(LlmError::Http(_)))),
+            "the configured read timeout must fire before the outer test deadline: {outcome:?}"
+        );
+    }
+
     // The default driver (max_retries = 3) keeps retrying past several
     // consecutive transport errors and still succeeds — exercising the loop
     // body more than once, not just the first re-attempt.
