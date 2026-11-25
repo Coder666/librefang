@@ -57,25 +57,28 @@ Claim at most 3 tasks in this activation; anything still queued is picked up on 
 /// All three are matched with [`glob_matches`] rather than string equality, the same way `available_tools` resolves them, so `task_*` grants here exactly as it grants at dispatch and a blocklist entry of `task_*` withholds just as broadly.
 /// A bare `*` is subsumed: `glob_matches` returns `true` for it unconditionally.
 fn can_claim_tasks(manifest: &AgentManifest) -> bool {
+    task_tool_allowed(manifest, "task_claim")
+}
+
+pub(super) fn task_tool_allowed(manifest: &AgentManifest, tool: &str) -> bool {
     use librefang_types::capability::glob_matches;
-    const TASK_CLAIM: &str = "task_claim";
 
     let declared = &manifest.capabilities.tools;
-    if !declared.is_empty() && !declared.iter().any(|t| glob_matches(t, TASK_CLAIM)) {
+    if !declared.is_empty() && !declared.iter().any(|t| glob_matches(t, tool)) {
         return false;
     }
     if !manifest.tool_allowlist.is_empty()
         && !manifest
             .tool_allowlist
             .iter()
-            .any(|a| glob_matches(a, TASK_CLAIM))
+            .any(|a| glob_matches(a, tool))
     {
         return false;
     }
     !manifest
         .tool_blocklist
         .iter()
-        .any(|b| glob_matches(b, TASK_CLAIM))
+        .any(|b| glob_matches(b, tool))
 }
 
 impl LibreFangKernel {
@@ -491,7 +494,10 @@ impl LibreFangKernel {
                             }
                             crate::triggers::TriggerMatchSource::TaskBoardAssigneeWake {
                                 task_id,
-                            } => SessionId::for_task_wake(aid, task_id, fire_time),
+                            }
+                            | crate::triggers::TriggerMatchSource::TaskBoardSplit { task_id } => {
+                                SessionId::for_task_wake(aid, task_id, fire_time)
+                            }
                         }),
                         librefang_types::agent::SessionMode::Persistent => None,
                     };
@@ -958,7 +964,16 @@ impl LibreFangKernel {
             use librefang_types::config::TaskSchedulerPluginFailureMode;
             use std::collections::BTreeMap;
 
-            let builtin_matches = matches.clone();
+            let ticket_ids: std::collections::HashSet<&str> = pending
+                .iter()
+                .filter(|task| task["is_decomposition"].as_bool() == Some(true))
+                .filter_map(|task| task["id"].as_str())
+                .collect();
+            let (ticket_wakes, builtin_matches): (Vec<_>, Vec<_>) =
+                matches.into_iter().partition(|matched| {
+                    matches!(&matched.source, TriggerMatchSource::TaskBoardAssigneeWake { task_id }
+                        if ticket_ids.contains(task_id.as_str()))
+                });
             let status_counts = match self.memory.substrate.task_status_counts().await {
                 Ok(counts) => Some(counts.into_iter().collect::<BTreeMap<String, u64>>()),
                 Err(error) => {
@@ -990,6 +1005,38 @@ impl LibreFangKernel {
                         };
                 }
             }
+
+            if let Some(manager) = plugin.decomposition_manager.as_deref() {
+                let mut wakes = Vec::with_capacity(matches.len());
+                for matched in matches {
+                    if let TriggerMatchSource::TaskBoardSplit { task_id } = &matched.source {
+                        if let Some(owner) = pending
+                            .iter()
+                            .find(|task| task["id"].as_str() == Some(task_id.as_str()))
+                            .and_then(|task| task["assigned_to"].as_str())
+                        {
+                            if let Err(error) = self
+                                .handoff_task_scope(
+                                    task_id,
+                                    owner,
+                                    matched.agent_id,
+                                    manager,
+                                    "Scheduler plugin flagged the task as too broad",
+                                    true,
+                                )
+                                .await
+                            {
+                                warn!(%error, %task_id, "Task scope handoff failed");
+                            }
+                        }
+                        continue;
+                    }
+                    wakes.push(matched);
+                }
+                matches = wakes;
+            }
+
+            matches.extend(ticket_wakes);
 
             // A suppressed candidate was not actually woken. Remove the
             // provisional backoff entry so a later scheduler cycle may

@@ -1424,6 +1424,152 @@ impl MemorySubstrate {
         .map_err(|e| LibreFangError::Internal(e.to_string()))?
     }
 
+    /// Replace a pending or owned claim with one durable decomposition ticket.
+    pub async fn task_request_split(
+        &self,
+        task_id: &str,
+        worker: &str,
+        manager: &str,
+        note: &str,
+        allow_pending: bool,
+    ) -> LibreFangResult<(String, bool)> {
+        let pool = self.pool.clone();
+        let (task_id, worker, manager, note) = (
+            task_id.to_owned(),
+            worker.to_owned(),
+            manager.to_owned(),
+            note.to_owned(),
+        );
+        tokio::task::spawn_blocking(move || {
+            use rusqlite::OptionalExtension as _;
+            let mut db = pool.get().map_err(LibreFangError::memory)?;
+            let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                .map_err(LibreFangError::memory)?;
+            let parent = tx.query_row(
+                "SELECT status, assigned_to, result, task_type='decomposition' AND length(payload)>0 FROM task_queue WHERE id = ?1",
+                [&task_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?, row.get::<_, bool>(3)?)),
+            ).optional().map_err(LibreFangError::memory)?;
+            let Some((status, owner, result, is_ticket)) = parent else {
+                return Err(LibreFangError::ResourceNotFound { kind: "task".into(), id: task_id });
+            };
+            if owner != worker || is_ticket {
+                return Err(LibreFangError::Conflict("Task cannot be handed off by this worker".into()));
+            }
+            if status == "needs_split" || status == "superseded" {
+                let record: serde_json::Value = serde_json::from_str(result.as_deref().unwrap_or(""))
+                    .map_err(LibreFangError::memory)?;
+                let ticket_id = record["ticket_id"].as_str().ok_or_else(||
+                    LibreFangError::Internal("Decomposition ticket ID is missing".into()))?;
+                return Ok((ticket_id.to_owned(), false));
+            }
+            let expected_status = if allow_pending { "pending" } else { "in_progress" };
+            if status != expected_status {
+                return Err(LibreFangError::Conflict(format!("Task is no longer {expected_status}")));
+            }
+
+            let ticket_id = uuid::Uuid::new_v4().to_string();
+            let now = chrono::Utc::now().to_rfc3339();
+            let result = serde_json::json!({ "reason": note, "ticket_id": ticket_id, "parent_id": task_id });
+            let description = format!(
+                "Read parent task {task_id} with task_status. Split it into small independent deliverables with explicit acceptance checks. Call task_complete for this ticket with split_children to save all children together."
+            );
+            tx.execute(
+                "UPDATE task_queue SET status='needs_split', result=?2, claimed_at=NULL WHERE id=?1",
+                rusqlite::params![task_id, result.to_string()],
+            ).map_err(LibreFangError::memory)?;
+            tx.execute(
+                "INSERT INTO task_queue (id, agent_id, task_type, payload, status, priority, created_at, title, description, assigned_to, created_by, timeout_secs)
+                 VALUES (?1, ?2, 'decomposition', ?3, 'pending', 0, ?4, 'Decompose task scope', ?5, ?2, ?6, NULL)",
+                rusqlite::params![ticket_id, manager, task_id.as_bytes(), now, description, worker],
+            ).map_err(LibreFangError::memory)?;
+            tx.commit().map_err(LibreFangError::memory)?;
+            Ok((ticket_id, true))
+        }).await.map_err(|e| LibreFangError::Internal(e.to_string()))?
+    }
+
+    /// Save children and supersede their parent as one transaction.
+    pub async fn task_finish_split(
+        &self,
+        ticket_id: &str,
+        manager: &str,
+        children: Vec<(String, String)>,
+        caps: TaskQueueCaps,
+    ) -> LibreFangResult<(Vec<String>, bool)> {
+        let pool = self.pool.clone();
+        let (ticket_id, manager) = (ticket_id.to_owned(), manager.to_owned());
+        tokio::task::spawn_blocking(move || {
+            use rusqlite::OptionalExtension as _;
+            let mut db = pool.get().map_err(LibreFangError::memory)?;
+            let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                .map_err(LibreFangError::memory)?;
+            let ticket = tx.query_row(
+                "SELECT status, assigned_to, payload FROM task_queue
+                 WHERE id=?1 AND task_type='decomposition' AND length(payload)>0",
+                [&ticket_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, Vec<u8>>(2)?)),
+            ).optional().map_err(LibreFangError::memory)?;
+            let Some((status, owner, payload)) = ticket else {
+                return Err(LibreFangError::Conflict("No decomposition ticket for that task".into()));
+            };
+            if owner != manager || !matches!(status.as_str(), "in_progress" | "completed") {
+                return Err(LibreFangError::Conflict("Claim the decomposition ticket before submitting children".into()));
+            }
+            let parent_id = String::from_utf8(payload).map_err(LibreFangError::memory)?;
+            let (parent_status, assignee, result) = tx.query_row(
+                "SELECT status, assigned_to, result FROM task_queue WHERE id=?1",
+                [&parent_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?)),
+            ).map_err(LibreFangError::memory)?;
+            let mut record: serde_json::Value = serde_json::from_str(&result).map_err(LibreFangError::memory)?;
+            if record["ticket_id"].as_str() != Some(ticket_id.as_str()) {
+                return Err(LibreFangError::Conflict("Decomposition ticket does not match its parent".into()));
+            }
+            if status == "completed" && parent_status == "superseded" {
+                return serde_json::from_value(record["child_ids"].take())
+                    .map(|ids| (ids, false)).map_err(LibreFangError::memory);
+            }
+            if parent_status != "needs_split" || status != "in_progress" || children.is_empty() || children.len() > 8 {
+                return Err(LibreFangError::Conflict("A split requires an active parent and one to eight children".into()));
+            }
+            let global: i64 = tx.query_row("SELECT COUNT(*) FROM task_queue WHERE status='pending'", [], |r| r.get(0))
+                .map_err(LibreFangError::memory)?;
+            let assigned: i64 = tx.query_row("SELECT COUNT(*) FROM task_queue WHERE status='pending' AND assigned_to=?1", [&assignee], |r| r.get(0))
+                .map_err(LibreFangError::memory)?;
+            let added = children.len() as i64;
+            if (caps.max_depth_global > 0 && global + added > i64::from(caps.max_depth_global))
+                || (caps.max_depth_per_agent > 0 && !assignee.is_empty()
+                    && assigned + added > i64::from(caps.max_depth_per_agent)) {
+                return Err(LibreFangError::QuotaExceeded("Not enough pending task capacity for this split".into()));
+            }
+            let stamp = chrono::Utc::now();
+            let mut ids = Vec::with_capacity(children.len());
+            for (title, description) in children {
+                let id = uuid::Uuid::new_v4().to_string();
+                let description = format!("Parent task: {parent_id}\n\n{description}");
+                tx.execute(
+                    "INSERT INTO task_queue (id, agent_id, task_type, payload, status, priority, created_at, title, description, assigned_to, created_by)
+                     VALUES (?1, ?2, ?3, ?4, 'pending', 0, ?5, ?3, ?6, ?7, ?2)",
+                    rusqlite::params![id, manager, title, b"", stamp.to_rfc3339(), description, assignee],
+                ).map_err(LibreFangError::memory)?;
+                ids.push(id);
+            }
+            record["child_ids"] = serde_json::json!(ids);
+            let record = record.to_string();
+            tx.execute(
+                "UPDATE task_queue SET status='superseded', result=?2, finished_at=?3 WHERE id=?1",
+                rusqlite::params![parent_id, record, stamp.timestamp()],
+            ).map_err(LibreFangError::memory)?;
+            tx.execute(
+                "UPDATE task_queue SET status='completed', result=?2, completed_at=?3, finished_at=?4, claimed_at=NULL WHERE id=?1",
+                rusqlite::params![ticket_id, record, stamp.to_rfc3339(), stamp.timestamp()],
+            ).map_err(LibreFangError::memory)?;
+            tx.commit().map_err(LibreFangError::memory)?;
+            Ok((ids, true))
+        }).await.map_err(|e| LibreFangError::Internal(e.to_string()))?
+    }
+
     /// Claim the next pending task (optionally for a specific assignee). Returns task JSON or None.
     ///
     /// `agent_id` must be the canonical UUID. `agent_name` is the human-readable
@@ -1548,7 +1694,7 @@ impl MemorySubstrate {
             let db = conn.get().map_err(LibreFangError::memory)?;
             // `finished_at` is the unix-epoch column the retention sweep reads (#3466).
             let rows = db.execute(
-                "UPDATE task_queue SET status = 'completed', result = ?2, completed_at = ?3, finished_at = ?4, claimed_at = NULL WHERE id = ?1 AND status = 'in_progress' AND assigned_to = ?5",
+                "UPDATE task_queue SET status = 'completed', result = ?2, completed_at = ?3, finished_at = ?4, claimed_at = NULL WHERE id = ?1 AND status = 'in_progress' AND assigned_to = ?5 AND NOT (task_type = 'decomposition' AND length(payload)>0)",
                 rusqlite::params![task_id, result, now, now_unix, completed_by],
             ).map_err(LibreFangError::memory)?;
             if rows == 0 {
@@ -1590,7 +1736,7 @@ impl MemorySubstrate {
             let db = conn.get().map_err(LibreFangError::memory)?;
             let rows = db
                 .execute(
-                    "DELETE FROM task_queue WHERE id = ?1",
+                    "DELETE FROM task_queue WHERE id = ?1 AND status NOT IN ('needs_split', 'superseded') AND NOT (task_type='decomposition' AND length(payload)>0)",
                     rusqlite::params![task_id],
                 )
                 .map_err(LibreFangError::memory)?;
@@ -1614,7 +1760,7 @@ impl MemorySubstrate {
                     "UPDATE task_queue \
                      SET status = 'pending', result = NULL, completed_at = NULL, \
                          finished_at = NULL, claimed_at = NULL \
-                     WHERE id = ?1 AND status IN ('completed', 'failed')",
+                     WHERE id = ?1 AND (status = 'failed' OR (status = 'completed' AND NOT (task_type='decomposition' AND length(payload)>0)))",
                     rusqlite::params![task_id],
                 )
                 .map_err(LibreFangError::memory)?;
@@ -1717,7 +1863,7 @@ impl MemorySubstrate {
                 ),
             };
             let sql = format!(
-                "SELECT id, title, description, status, assigned_to, created_by, created_at, completed_at, result, claimed_at, priority, timeout_secs FROM task_queue{where_sql} ORDER BY created_at DESC{window}"
+                "SELECT id, title, description, status, assigned_to, created_by, created_at, completed_at, result, claimed_at, priority, timeout_secs, (task_type='decomposition' AND length(payload)>0) FROM task_queue{where_sql} ORDER BY created_at DESC{window}"
             );
 
             let mut stmt = db.prepare(&sql).map_err(LibreFangError::memory)?;
@@ -1735,6 +1881,7 @@ impl MemorySubstrate {
                     "claimed_at": row.get::<_, Option<String>>(9).unwrap_or(None),
                     "priority": row.get::<_, i64>(10).unwrap_or(0),
                     "timeout_secs": row.get::<_, Option<u32>>(11).unwrap_or(None),
+                    "is_decomposition": row.get::<_, bool>(12)?,
                 }))
             }).map_err(LibreFangError::memory)?;
 
@@ -1817,7 +1964,7 @@ impl MemorySubstrate {
                     let now_unix = chrono::Utc::now().timestamp();
                     db.execute(
                         "UPDATE task_queue \
-                         SET status = 'failed', assigned_to = '', claimed_at = NULL, \
+                         SET status = 'failed', assigned_to = CASE WHEN task_type = 'decomposition' AND length(payload)>0 THEN assigned_to ELSE '' END, claimed_at = NULL, \
                              finished_at = ?2, \
                              retry_count = retry_count + 1 \
                          WHERE id = ?1 AND status = 'in_progress'",
@@ -1827,7 +1974,7 @@ impl MemorySubstrate {
                 } else {
                     db.execute(
                         "UPDATE task_queue \
-                         SET status = 'pending', assigned_to = '', claimed_at = NULL, \
+                         SET status = 'pending', assigned_to = CASE WHEN task_type = 'decomposition' AND length(payload)>0 THEN assigned_to ELSE '' END, claimed_at = NULL, \
                              retry_count = retry_count + 1 \
                          WHERE id = ?1 AND status = 'in_progress'",
                         rusqlite::params![id],
@@ -1911,7 +2058,7 @@ impl MemorySubstrate {
                 // before the timestamp is refreshed (#3466).
                 "pending" => db.execute(
                     "UPDATE task_queue \
-                     SET status = 'pending', claimed_at = NULL, assigned_to = '', \
+                     SET status = 'pending', claimed_at = NULL, assigned_to = CASE WHEN (task_type='decomposition' AND length(payload)>0) THEN assigned_to ELSE '' END, \
                          finished_at = NULL \
                      WHERE id = ?1 AND status = 'failed'",
                     rusqlite::params![task_id],
@@ -1924,7 +2071,7 @@ impl MemorySubstrate {
                 "cancelled" => db.execute(
                     "UPDATE task_queue \
                      SET status = 'cancelled', finished_at = ?2 \
-                     WHERE id = ?1 AND status NOT IN ('completed', 'cancelled')",
+                     WHERE id = ?1 AND status NOT IN ('completed', 'cancelled', 'needs_split', 'superseded') AND NOT (task_type='decomposition' AND length(payload)>0)",
                     rusqlite::params![task_id, now_unix],
                 ),
                 _ => {
@@ -1961,7 +2108,7 @@ impl MemorySubstrate {
                 .execute(
                     "UPDATE task_queue \
                      SET status = 'cancelled', finished_at = ?1, result = ?2 \
-                     WHERE status = 'pending' AND created_at < ?3",
+                     WHERE status = 'pending' AND created_at < ?3 AND NOT (task_type='decomposition' AND length(payload)>0)",
                     rusqlite::params![now.timestamp(), reason, cutoff],
                 )
                 .map_err(LibreFangError::memory)?;
@@ -1992,7 +2139,7 @@ impl MemorySubstrate {
             let rows = db
                 .execute(
                     "DELETE FROM task_queue \
-                     WHERE status IN ('completed', 'failed', 'cancelled') \
+                     WHERE status IN ('completed', 'failed', 'cancelled', 'superseded') AND NOT (status = 'failed' AND (task_type='decomposition' AND length(payload)>0)) \
                        AND finished_at IS NOT NULL AND finished_at < ?1",
                     rusqlite::params![cutoff],
                 )
@@ -2883,6 +3030,144 @@ mod tests {
     /// #8219: the aggregate must agree with what listing every row would have counted.
     ///
     /// The endpoint's four integers are the contract, not the query that produces them, so this compares the new `GROUP BY` against the old list-and-tally on the same store — including a status the summary handler does not recognise, which has to survive as its own bucket rather than being folded away.
+    #[tokio::test]
+    async fn task_decomposition_is_atomic_and_idempotent() {
+        let db = MemorySubstrate::open_in_memory(0.1).unwrap();
+        let caps = TaskQueueCaps::UNLIMITED;
+        let parent = db
+            .task_post(
+                "Parent",
+                "Original requirements",
+                Some("worker"),
+                None,
+                0,
+                None,
+                caps,
+            )
+            .await
+            .unwrap();
+        db.task_claim("worker", None).await.unwrap().unwrap();
+        assert!(db
+            .task_request_split(&parent, "other", "manager", "Broad", false)
+            .await
+            .is_err());
+        let (ticket, created) = db
+            .task_request_split(&parent, "worker", "manager", "Broad", false)
+            .await
+            .unwrap();
+        assert!(created);
+        assert_eq!(
+            db.task_request_split(&parent, "worker", "manager", "Broad", false)
+                .await
+                .unwrap(),
+            (ticket.clone(), false)
+        );
+        assert_eq!(
+            db.task_get(&parent).await.unwrap().unwrap()["status"],
+            "needs_split"
+        );
+        assert!(db.task_claim("worker", None).await.unwrap().is_none());
+        assert!(!db.task_delete(&parent).await.unwrap());
+
+        let children = vec![
+            ("First".to_string(), "Check first".to_string()),
+            ("Second".to_string(), "Check second".to_string()),
+        ];
+        assert!(db
+            .task_finish_split(&ticket, "manager", children.clone(), caps)
+            .await
+            .is_err());
+        assert_eq!(
+            db.task_claim("manager", None).await.unwrap().unwrap()["id"],
+            ticket
+        );
+        assert!(db
+            .task_complete(&ticket, "manager", "plain completion")
+            .await
+            .is_err());
+        assert!(db
+            .task_finish_split(&ticket, "other", children.clone(), caps)
+            .await
+            .is_err());
+        let limited = TaskQueueCaps {
+            max_depth_global: 1,
+            max_depth_per_agent: 0,
+        };
+        assert!(matches!(
+            db.task_finish_split(&ticket, "manager", children.clone(), limited)
+                .await,
+            Err(LibreFangError::QuotaExceeded(_))
+        ));
+        assert!(db.task_list(Some("pending")).await.unwrap().is_empty());
+        assert_eq!(
+            db.task_get(&parent).await.unwrap().unwrap()["status"],
+            "needs_split"
+        );
+
+        let (ids, created) = db
+            .task_finish_split(&ticket, "manager", children.clone(), caps)
+            .await
+            .unwrap();
+        assert!(created);
+        assert_eq!(ids.len(), 2);
+        assert_eq!(
+            db.task_finish_split(&ticket, "manager", children, caps)
+                .await
+                .unwrap(),
+            (ids.clone(), false)
+        );
+        assert_eq!(
+            db.task_get(&parent).await.unwrap().unwrap()["status"],
+            "superseded"
+        );
+        assert_eq!(
+            db.task_get(&ticket).await.unwrap().unwrap()["status"],
+            "completed"
+        );
+        assert!(!db.task_retry(&ticket).await.unwrap());
+        let pending = db.task_list(Some("pending")).await.unwrap();
+        assert_eq!(pending.len(), 2);
+        assert!(pending.iter().all(|child| child["assigned_to"] == "worker"
+            && child["description"].as_str().unwrap().contains(&parent)));
+    }
+
+    #[tokio::test]
+    async fn task_decomposition_requeue_keeps_manager_assignment() {
+        let db = MemorySubstrate::open_in_memory(0.1).unwrap();
+        let parent = db
+            .task_post(
+                "Parent",
+                "Requirements",
+                Some("worker"),
+                None,
+                0,
+                None,
+                TaskQueueCaps::UNLIMITED,
+            )
+            .await
+            .unwrap();
+        let (ticket, _) = db
+            .task_request_split(&parent, "worker", "manager", "Broad", true)
+            .await
+            .unwrap();
+        db.task_claim("manager", None).await.unwrap().unwrap();
+        db.pool.get().unwrap().execute(
+            "UPDATE task_queue SET claimed_at = '2000-01-01T00:00:00+00:00', retry_count = 1 WHERE id = ?1",
+            [&ticket],
+        ).unwrap();
+        db.task_reset_stuck(1, 1).await.unwrap();
+        assert_eq!(
+            db.task_get(&ticket).await.unwrap().unwrap()["status"],
+            "failed"
+        );
+        assert!(db.task_update_status(&ticket, "pending").await.unwrap());
+        assert!(db.task_claim("worker", None).await.unwrap().is_none());
+        assert_eq!(
+            db.task_claim("manager", None).await.unwrap().unwrap()["id"],
+            ticket
+        );
+    }
+
     #[tokio::test]
     async fn task_status_counts_agrees_with_listing_every_row() {
         let substrate = MemorySubstrate::open_in_memory(0.1).unwrap();

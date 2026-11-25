@@ -4743,6 +4743,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "librefang-types",
+ "serde",
  "serde_json",
  "tokio",
  "tracing",

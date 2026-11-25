@@ -31,10 +31,11 @@ import { toastErr } from "../lib/errors";
 import { useUIStore } from "../lib/store";
 
 // Operator-visible status columns (order: left to right).
-// Cancelled is shown last and is collapsed when empty.
+// Optional lifecycle columns are collapsed when empty.
 const COLUMNS: Array<{
   key: string;
   labelKey: string;
+  defaultLabel?: string;
   variant: "warning" | "brand" | "success" | "error" | "default";
   // Which statuses live in this column
   statuses: string[];
@@ -43,6 +44,8 @@ const COLUMNS: Array<{
   { key: "in_progress", labelKey: "tasks.col_in_progress", variant: "brand",   statuses: ["in_progress"] },
   { key: "completed",   labelKey: "tasks.col_completed",   variant: "success", statuses: ["completed"] },
   { key: "failed",      labelKey: "tasks.col_failed",      variant: "error",   statuses: ["failed"] },
+  { key: "needs_split", labelKey: "tasks.col_needs_split", defaultLabel: "Needs split", variant: "warning", statuses: ["needs_split"] },
+  { key: "superseded", labelKey: "tasks.col_superseded", defaultLabel: "Superseded", variant: "default", statuses: ["superseded"] },
   { key: "cancelled",   labelKey: "tasks.col_cancelled",   variant: "default", statuses: ["cancelled"] },
 ];
 
@@ -92,6 +95,8 @@ function allowedActions(status?: string): Array<"requeue" | "cancel" | "retry" |
     case "failed":      return ["retry", "delete"];
     case "completed":   return ["delete"];
     case "cancelled":   return ["requeue", "delete"];
+    case "needs_split":
+    case "superseded":  return [];
     default:            return ["delete"];
   }
 }
@@ -115,7 +120,9 @@ function TaskCard({ task, isDragTarget, onDragStart, agentsById }: TaskCardProps
   const updateMutation = useUpdateTaskStatus();
 
   const id = task.id ?? "";
-  const actions = allowedActions(task.status);
+  const actions = task.is_decomposition
+    ? allowedActions(task.status).filter((action) => action === "retry")
+    : allowedActions(task.status);
 
   function handleAction(action: "requeue" | "cancel" | "retry" | "delete") {
     if (!id) return;
@@ -627,7 +634,7 @@ export function TasksPage() {
 
   // Columns — hide Cancelled when it has no tasks and no filter
   const visibleColumns = COLUMNS.filter((col) => {
-    if (col.key !== "cancelled") return true;
+    if (!["cancelled", "needs_split", "superseded"].includes(col.key)) return true;
     return getColumnTasks(col.statuses).length > 0;
   });
 
@@ -724,7 +731,7 @@ export function TasksPage() {
               <KanbanColumn
                 key={col.key}
                 columnKey={col.key}
-                label={t(col.labelKey)}
+                label={t(col.labelKey, { defaultValue: col.defaultLabel ?? col.labelKey })}
                 badgeVariant={col.variant}
                 tasks={colTasks}
                 dragTaskId={dragTaskId}

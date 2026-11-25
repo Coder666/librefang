@@ -74,6 +74,42 @@ pub(super) async fn tool_task_complete(
     let task_id = input["task_id"]
         .as_str()
         .ok_or(ToolError::MissingParameter("task_id"))?;
+    let split_reason = input.get("split_reason");
+    let split_children = input.get("split_children");
+    if split_reason.is_some() || split_children.is_some() {
+        validate_non_empty(task_id, "task_id")?;
+        if input.get("result").is_some() || (split_reason.is_some() && split_children.is_some()) {
+            return Err(ToolError::InvalidParameter {
+                name: "task_id",
+                reason: "provide exactly one of result, split_reason, or split_children"
+                    .to_string(),
+            });
+        }
+        let kh = require_kernel_typed(kernel)?;
+        let agent_id = caller_agent_id.ok_or_else(|| caller_agent_id_missing("task_complete"))?;
+        if let Some(reason) = split_reason {
+            let reason = reason
+                .as_str()
+                .ok_or(ToolError::MissingParameter("split_reason"))?;
+            let ticket = kh
+                .task_request_split(agent_id, task_id, reason)
+                .await
+                .map_err(ToolError::upstream)?;
+            return Ok(
+                serde_json::json!({"status": "needs_split", "ticket_id": ticket}).to_string(),
+            );
+        }
+        let children = serde_json::from_value(split_children.cloned().unwrap_or_default())
+            .map_err(|error| ToolError::InvalidParameter {
+                name: "split_children",
+                reason: error.to_string(),
+            })?;
+        let ids = kh
+            .task_finish_split(agent_id, task_id, children)
+            .await
+            .map_err(ToolError::upstream)?;
+        return Ok(serde_json::json!({"status": "completed", "child_ids": ids}).to_string());
+    }
     let result = input["result"]
         .as_str()
         .ok_or(ToolError::MissingParameter("result"))?;
@@ -114,7 +150,7 @@ pub(super) async fn tool_task_status(
             // Project to the same six columns comms_task_status returns from
             // the bridge SQL — keeps the native tool's contract tight even if
             // task_get later grows additional fields.
-            let projected = serde_json::json!({
+            let mut projected = serde_json::json!({
                 "status":       task.get("status").cloned().unwrap_or(serde_json::Value::Null),
                 "result":       task.get("result").cloned().unwrap_or(serde_json::Value::Null),
                 "title":        task.get("title").cloned().unwrap_or(serde_json::Value::Null),
@@ -122,6 +158,9 @@ pub(super) async fn tool_task_status(
                 "created_at":   task.get("created_at").cloned().unwrap_or(serde_json::Value::Null),
                 "completed_at": task.get("completed_at").cloned().unwrap_or(serde_json::Value::Null),
             });
+            if matches!(task["status"].as_str(), Some("needs_split" | "superseded")) {
+                projected["description"] = task["description"].clone();
+            }
             Ok(serde_json::to_string_pretty(&projected)?)
         }
         // Behaviour preserved from the pre-#3576 contract: a missing task is a

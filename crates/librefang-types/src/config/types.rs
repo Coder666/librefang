@@ -3948,6 +3948,8 @@ pub struct TaskSchedulerPluginConfig {
     /// Arguments passed to the executable. Put policy-specific configuration
     /// in a file and pass its path here.
     pub args: Vec<String>,
+    /// Agent name or ID that owns decomposition handoffs when configured.
+    pub decomposition_manager: Option<String>,
     /// Maximum wall-clock duration for one policy evaluation.
     pub timeout_secs: u64,
     /// Maximum accepted stdout size. Output beyond this limit is rejected.
@@ -3963,6 +3965,7 @@ impl Default for TaskSchedulerPluginConfig {
             args: Vec::new(),
             timeout_secs: 30,
             max_response_bytes: 1_048_576,
+            decomposition_manager: None,
             on_failure: TaskSchedulerPluginFailureMode::Builtin,
         }
     }
