@@ -288,14 +288,20 @@ pub fn proxied_client_fallback() -> reqwest::Client {
 /// Callers that want a best-effort client should call [`proxied_client`] on error
 /// and log a warning explicitly — this function never silently falls back.
 pub fn proxied_client_with_override(proxy_url: &str) -> reqwest::Result<reqwest::Client> {
+    proxied_client_builder_with_override(proxy_url)?.build()
+}
+
+/// Build a client with an explicit proxy and customizable request policy.
+pub fn proxied_client_builder_with_override(
+    proxy_url: &str,
+) -> reqwest::Result<reqwest::ClientBuilder> {
     let proxy = Proxy::all(proxy_url)?;
-    reqwest::Client::builder()
+    Ok(reqwest::Client::builder()
         .use_preconfigured_tls(tls_config())
         .user_agent(USER_AGENT)
         .connect_timeout(std::time::Duration::from_secs(30))
         .read_timeout(std::time::Duration::from_secs(300))
-        .proxy(proxy)
-        .build()
+        .proxy(proxy))
 }
 
 /// Backward-compatible alias for [`proxied_client_builder`].

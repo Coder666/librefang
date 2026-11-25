@@ -118,13 +118,23 @@ impl OpenAIDriver {
         proxy_url: Option<&str>,
         request_timeout_secs: Option<u64>,
     ) -> Self {
-        let client = match proxy_url {
-            Some(url) => librefang_http::proxied_client_with_override(url).unwrap_or_else(|e| {
-                tracing::warn!(url, error = %e, "Invalid per-provider proxy URL, using global proxy");
-                librefang_http::proxied_client()
-            }),
-            None => librefang_http::proxied_client(),
+        let client_builder = match proxy_url {
+            Some(url) => librefang_http::proxied_client_builder_with_override(url)
+                .unwrap_or_else(|e| {
+                    tracing::warn!(url, error = %e, "Invalid per-provider proxy URL, using global proxy");
+                    librefang_http::proxied_client_builder()
+                }),
+            None => librefang_http::proxied_client_builder(),
         };
+        // Slow providers can spend most of their request budget before sending
+        // response headers or the first streamed token.
+        let client_builder = match request_timeout_secs {
+            Some(secs) => client_builder.read_timeout(std::time::Duration::from_secs(secs)),
+            None => client_builder,
+        };
+        let client = client_builder
+            .build()
+            .expect("OpenAI HTTP client with proxy/TLS config should always build");
         // #3477: self-hosted OpenAI-compat endpoints (Ollama, etc.) often
         // include a trailing slash; concatenating "/chat/completions" then
         // produces "//chat/completions" which most servers 504 on.
