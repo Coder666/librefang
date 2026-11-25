@@ -1601,7 +1601,9 @@ impl MemorySubstrate {
                  FROM task_queue
                  WHERE (status = 'in_progress' AND assigned_to = ?1)
                     OR (status = 'pending' AND (assigned_to = ?1 OR assigned_to = ?2 OR assigned_to = ''))
-                 ORDER BY (status = 'in_progress') DESC, claimed_at ASC, priority DESC, created_at ASC
+                 ORDER BY (status = 'in_progress') DESC, claimed_at ASC,
+                          (task_type = 'decomposition' AND length(payload)>0) DESC,
+                          priority DESC, created_at ASC
                  LIMIT 1"
             ).map_err(LibreFangError::memory)?;
 
@@ -3087,10 +3089,19 @@ mod tests {
             .task_finish_split(&ticket, "manager", children.clone(), caps)
             .await
             .is_err());
+        let pool = db
+            .task_post("Pool task", "Independent work", None, None, 10, None, caps)
+            .await
+            .unwrap();
         assert_eq!(
             db.task_claim("manager", None).await.unwrap().unwrap()["id"],
             ticket
         );
+        assert_eq!(
+            db.task_get(&pool).await.unwrap().unwrap()["status"],
+            "pending"
+        );
+        assert!(db.task_delete(&pool).await.unwrap());
         assert!(db
             .task_complete(&ticket, "manager", "plain completion")
             .await

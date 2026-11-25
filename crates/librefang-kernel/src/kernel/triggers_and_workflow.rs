@@ -980,8 +980,9 @@ impl LibreFangKernel {
                 .filter(|task| task["is_decomposition"].as_bool() == Some(true))
                 .filter_map(|task| task["id"].as_str())
                 .collect();
-            let (ticket_wakes, builtin_matches): (Vec<_>, Vec<_>) =
-                matches.into_iter().partition(|matched| {
+            let (ticket_wakes, builtin_matches): (Vec<_>, Vec<_>) = std::mem::take(&mut matches)
+                .into_iter()
+                .partition(|matched| {
                     matches!(&matched.source, TriggerMatchSource::TaskBoardAssigneeWake { task_id }
                         if ticket_ids.contains(task_id.as_str()))
                 });
