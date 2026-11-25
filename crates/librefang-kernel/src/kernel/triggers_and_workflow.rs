@@ -989,16 +989,15 @@ impl LibreFangKernel {
                 }
                 Err(error) => {
                     warn!(%error, "Task board scheduler plugin failed");
-                    matches =
-                        if matches!(plugin.on_failure, TaskSchedulerPluginFailureMode::Suppress) {
-                            Vec::new()
-                        } else {
-                            builtin_matches.clone()
-                        };
-                    if matches.is_empty() {
-                        "failed_suppressed"
-                    } else {
-                        "failed_builtin"
+                    match plugin.on_failure {
+                        TaskSchedulerPluginFailureMode::Suppress => {
+                            matches.clear();
+                            "failed_suppressed"
+                        }
+                        TaskSchedulerPluginFailureMode::Builtin => {
+                            matches = builtin_matches.clone();
+                            "failed_builtin"
+                        }
                     }
                 }
             };
