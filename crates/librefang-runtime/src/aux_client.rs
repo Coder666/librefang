@@ -146,6 +146,11 @@ impl AuxClient {
         self
     }
 
+    /// The unified inference deadline when explicitly configured.
+    pub fn unified_inference_timeout_secs(&self) -> Option<u64> {
+        self.kernel_config.unified_inference_timeout_secs()
+    }
+
     /// Resolve the chain for `task`.
     ///
     /// Returns an `Arc<dyn LlmDriver>` that callers invoke exactly like the
@@ -278,18 +283,14 @@ impl AuxClient {
             vertex_ai: self.kernel_config.vertex_ai.clone(),
             azure_openai: self.kernel_config.azure_openai.clone(),
             skip_permissions: true,
-            message_timeout_secs: self.kernel_config.default_model.message_timeout_secs,
+            message_timeout_secs: self.kernel_config.inference_message_timeout_secs(),
             mcp_bridge: None,
             proxy_url: self
                 .kernel_config
                 .provider_proxy_urls
                 .get(provider)
                 .cloned(),
-            request_timeout_secs: self
-                .kernel_config
-                .provider_request_timeout_secs
-                .get(provider)
-                .copied(),
+            request_timeout_secs: self.kernel_config.inference_timeout_secs(provider),
             emit_caller_trace_headers: self.kernel_config.telemetry.emit_caller_trace_headers,
             max_retries: self
                 .kernel_config

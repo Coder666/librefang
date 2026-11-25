@@ -228,6 +228,10 @@ impl librefang_kernel_handle::AcpFsBridge for OverrideKernel {}
 impl librefang_kernel_handle::AcpTerminalBridge for OverrideKernel {}
 
 impl librefang_kernel_handle::CatalogQuery for OverrideKernel {
+    fn unified_inference_timeout_secs(&self) -> Option<u64> {
+        Some(900)
+    }
+
     fn proactive_memory_extraction_model_for(&self, agent_id: &str) -> Option<String> {
         self.overrides.get(agent_id).cloned()
     }
@@ -281,6 +285,7 @@ impl librefang_runtime::llm_driver::LlmDriver for SharedRecordingDriver {
         librefang_runtime::llm_driver::CompletionResponse,
         librefang_runtime::llm_driver::LlmError,
     > {
+        assert_eq!(request.timeout_secs, Some(900));
         self.captured_models
             .lock()
             .unwrap()

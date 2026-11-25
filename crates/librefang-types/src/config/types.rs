@@ -7725,6 +7725,26 @@ impl Default for KernelConfig {
 }
 
 impl KernelConfig {
+    /// Override for all inference calls, including short auxiliary operations.
+    pub fn unified_inference_timeout_secs(&self) -> Option<u64> {
+        self.provider_request_timeout_secs
+            .get("*")
+            .copied()
+            .filter(|seconds| *seconds > 0)
+    }
+
+    /// Resolve the unified override first, then a legacy provider-specific value.
+    pub fn inference_timeout_secs(&self, provider: &str) -> Option<u64> {
+        self.unified_inference_timeout_secs()
+            .or_else(|| self.provider_request_timeout_secs.get(provider).copied())
+    }
+
+    /// Use the unified override for CLI-based inference when configured.
+    pub fn inference_message_timeout_secs(&self) -> u64 {
+        self.unified_inference_timeout_secs()
+            .unwrap_or(self.default_model.message_timeout_secs)
+    }
+
     /// Every group `user` belongs to, ordered by group name.
     ///
     /// Ordering is by name rather than by declaration order in `config.toml` so that

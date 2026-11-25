@@ -81,6 +81,7 @@ pub struct ReviewAttribution<'a> {
     pub agent_id: &'a str,
     pub session_id: Option<&'a str>,
     pub candidate_id: Option<&'a str>,
+    pub inference_timeout_secs: Option<u64>,
 }
 
 /// Run the LLM review pass.
@@ -133,7 +134,7 @@ pub async fn review_candidate(
         // triages. Same defect class as `history_fold` / `web_augment` in
         // this PR — fixed inline to keep the audit claim accurate.
         response_format: Some(ResponseFormat::Json),
-        timeout_secs: Some(30),
+        timeout_secs: Some(attribution.inference_timeout_secs.unwrap_or(30)),
         extra_body: None,
         agent_id: Some(attribution.agent_id.to_string()),
         session_id: attribution.session_id.map(str::to_string),
@@ -255,6 +256,7 @@ mod tests {
         ReviewAttribution {
             agent_id: "11111111-1111-1111-1111-111111111111",
             session_id: Some("test-session"),
+            inference_timeout_secs: None,
             candidate_id: Some("test-candidate"),
         }
     }

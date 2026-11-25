@@ -409,6 +409,12 @@ impl LlmMemoryExtractor {
         self.kernel_handle.lock()
     }
 
+    fn inference_timeout_secs(&self, legacy_default: u64) -> u64 {
+        self.kernel_handle()
+            .and_then(|kernel| kernel.unified_inference_timeout_secs())
+            .unwrap_or(legacy_default)
+    }
+
     fn kernel_handle(&self) -> Option<std::sync::Arc<dyn crate::kernel_handle::KernelHandle>> {
         self.lock_kernel_handle_slot()
             .as_ref()
@@ -579,7 +585,7 @@ impl LlmMemoryExtractor {
             cache_ttl: None,
             prompt_cache_strategy: None,
             response_format: Some(ResponseFormat::Json),
-            timeout_secs: Some(EXTRACTION_TIMEOUT_SECS),
+            timeout_secs: Some(self.inference_timeout_secs(EXTRACTION_TIMEOUT_SECS)),
             extra_body: None,
             agent_id: None,
             session_id: None,
@@ -704,7 +710,7 @@ impl MemoryExtractor for LlmMemoryExtractor {
             // — tell JSON-mode-capable providers to honour it so weak models
             // can't drift into prose.
             response_format: Some(ResponseFormat::Json),
-            timeout_secs: Some(DECISION_TIMEOUT_SECS),
+            timeout_secs: Some(self.inference_timeout_secs(DECISION_TIMEOUT_SECS)),
             extra_body: None,
             agent_id: None,
             session_id: None,

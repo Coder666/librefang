@@ -14,6 +14,11 @@
 use librefang_types::model_catalog::VisionSupport;
 
 pub trait CatalogQuery: Send + Sync {
+    /// The configured inference deadline shared by primary and auxiliary requests.
+    fn unified_inference_timeout_secs(&self) -> Option<u64> {
+        None
+    }
+
     /// How the OpenAI-compatible driver must handle `reasoning_content`
     /// on historical assistant turns for the given model. Default impl
     /// returns [`librefang_types::model_catalog::ReasoningEchoPolicy::None`],
