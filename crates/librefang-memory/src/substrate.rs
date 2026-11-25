@@ -3198,7 +3198,15 @@ mod tests {
         let substrate = MemorySubstrate::open_in_memory(0.1).unwrap();
         for title in ["first", "second"] {
             substrate
-                .task_post(title, "", Some("coder"), None, 0, None, TaskQueueCaps::UNLIMITED)
+                .task_post(
+                    title,
+                    "",
+                    Some("coder"),
+                    None,
+                    0,
+                    None,
+                    TaskQueueCaps::UNLIMITED,
+                )
                 .await
                 .unwrap();
         }
@@ -3261,8 +3269,11 @@ mod tests {
 
         let mut fresh = 0;
         let mut resumed = 0;
+        let mut observed_claim = None;
         for handle in handles {
             let task = handle.await.unwrap().unwrap().unwrap();
+            let claim = (task["id"].clone(), task["claimed_at"].clone());
+            assert_eq!(observed_claim.get_or_insert_with(|| claim.clone()), &claim);
             if task["resumed"] == true {
                 resumed += 1;
             } else {
