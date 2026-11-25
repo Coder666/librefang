@@ -109,12 +109,12 @@ impl DriverCache {
         let key_hash = hex::encode(&digest[..16]);
 
         format!(
-            "{}|{}|{}|{}|{}|{}",
+            "{}|{}|{}|{}|{:?}|{}",
             config.provider,
             key_hash,
             config.base_url.as_deref().unwrap_or(""),
             config.proxy_url.as_deref().unwrap_or(""),
-            config.request_timeout_secs.unwrap_or(0),
+            config.request_timeout_secs,
             config.message_timeout_secs,
         )
     }
@@ -1252,6 +1252,19 @@ mod tests {
         };
 
         assert_ne!(DriverCache::cache_key(&a), DriverCache::cache_key(&b));
+    }
+
+    #[test]
+    fn cache_key_distinguishes_explicit_zero_from_default_request_timeout() {
+        let default_timeout = DriverConfig::default();
+        let zero_timeout = DriverConfig {
+            request_timeout_secs: Some(0),
+            ..default_timeout.clone()
+        };
+        assert_ne!(
+            DriverCache::cache_key(&default_timeout),
+            DriverCache::cache_key(&zero_timeout)
+        );
     }
 
     #[test]
