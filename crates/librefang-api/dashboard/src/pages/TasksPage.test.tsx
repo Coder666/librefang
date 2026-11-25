@@ -212,6 +212,15 @@ describe("TasksPage", () => {
       expect(screen.getByText("tasks.completed_age")).toBeInTheDocument();
     });
 
+    it("omits age badges for invalid timestamps and keeps the recorded result", () => {
+      useTaskQueueMock.mockReturnValue(makeQuery({
+        tasks: [{ ...SAMPLE_TASKS[2], completed_at: "invalid" }],
+      }));
+      renderPage();
+      expect(screen.queryByText("tasks.completed_age")).not.toBeInTheDocument();
+      expect(screen.queryByText("tasks.awaiting_result")).not.toBeInTheDocument();
+    });
+
     it("shows task description in the card", () => {
       renderPage();
       expect(screen.getByText("Pending task description")).toBeInTheDocument();

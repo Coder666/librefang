@@ -228,7 +228,11 @@ function TaskCard({ task, isDragTarget, onDragStart, agentsById }: TaskCardProps
           </span>
         )}
         {task.retry_count != null && task.retry_count > 0 && (
-          <span>{t("tasks.retries_count", { defaultValue: "{{count}} automatic retries", count: task.retry_count })}</span>
+          <span>{t("tasks.retries_count", {
+            defaultValue_one: "{{count}} automatic retry",
+            defaultValue_other: "{{count}} automatic retries",
+            count: task.retry_count,
+          })}</span>
         )}
         {task.status === "in_progress" && !task.result && (
           <span>{t("tasks.awaiting_result", { defaultValue: "Awaiting result" })}</span>
