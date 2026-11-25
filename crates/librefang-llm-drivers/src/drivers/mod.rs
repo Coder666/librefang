@@ -115,7 +115,7 @@ impl DriverCache {
             config.base_url.as_deref().unwrap_or(""),
             config.proxy_url.as_deref().unwrap_or(""),
             config.request_timeout_secs.unwrap_or(0),
-            config.message_timeout_secs,
+            format_args!("{}|{}", config.message_timeout_secs, config.max_retries),
         )
     }
 }
@@ -1311,6 +1311,22 @@ mod tests {
     #[test]
     fn test_unknown_provider_returns_none() {
         assert!(provider_defaults("nonexistent").is_none());
+    }
+
+    #[test]
+    fn cache_key_distinguishes_retry_budgets() {
+        let no_retries = DriverConfig {
+            max_retries: 0,
+            ..Default::default()
+        };
+        let one_retry = DriverConfig {
+            max_retries: 1,
+            ..no_retries.clone()
+        };
+        assert_ne!(
+            DriverCache::cache_key(&no_retries),
+            DriverCache::cache_key(&one_retry)
+        );
     }
 
     #[test]
