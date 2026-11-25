@@ -137,18 +137,27 @@ pub(super) async fn apply(
     let response_limit = config.max_response_bytes;
 
     let exchange = async move {
-        stdin
-            .write_all(&input)
-            .await
-            .map_err(|error| format!("cannot write scheduler request: {error}"))?;
-        drop(stdin);
-
-        let mut output = Vec::new();
-        stdout
-            .take(response_limit.saturating_add(1))
-            .read_to_end(&mut output)
-            .await
-            .map_err(|error| format!("cannot read scheduler response: {error}"))?;
+        let send_request = async move {
+            stdin
+                .write_all(&input)
+                .await
+                .map_err(|error| format!("cannot write scheduler request: {error}"))
+        };
+        let read_response = async move {
+            let mut output = Vec::new();
+            stdout
+                .take(response_limit.saturating_add(1))
+                .read_to_end(&mut output)
+                .await
+                .map_err(|error| format!("cannot read scheduler response: {error}"))?;
+            if output.len() as u64 > response_limit {
+                return Err(format!(
+                    "scheduler plugin response exceeded configured limit of {response_limit} bytes"
+                ));
+            }
+            Ok(output)
+        };
+        let (_, output) = tokio::try_join!(send_request, read_response)?;
         let status = child
             .wait()
             .await
@@ -167,13 +176,6 @@ pub(super) async fn apply(
                 config.timeout_secs
             )
         })??;
-    if output.len() as u64 > config.max_response_bytes {
-        return Err(format!(
-            "scheduler plugin response exceeded configured limit of {} bytes",
-            config.max_response_bytes
-        ));
-    }
-
     apply_response(&matches, &output)
 }
 
@@ -454,7 +456,7 @@ mod tests {
     async fn subprocess_output_limit_is_enforced() {
         let agent = AgentId::new();
         let (_directory, mut config) =
-            executable_plugin("cat >/dev/null\nprintf '12345678901'", vec![]);
+            executable_plugin("printf '12345678901'\nexec sleep 10", vec![]);
         config.max_response_bytes = 10;
         let error = apply(
             &config,

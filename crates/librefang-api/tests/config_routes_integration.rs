@@ -925,6 +925,56 @@ async fn config_set_rejects_non_allowlisted_path() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn scheduler_executable_configuration_is_file_only() {
+    let h = boot_router_with_api_key(API_KEY).await;
+    for (path, value) in [
+        (
+            "task_board.scheduler_plugin",
+            serde_json::json!({ "command": "scheduler" }),
+        ),
+        (
+            "task_board.scheduler_plugin.command",
+            serde_json::json!("scheduler"),
+        ),
+    ] {
+        let (status, body) = send(
+            h.app.clone(),
+            auth_post_json(
+                "/api/config/set",
+                serde_json::json!({ "path": path, "value": value }),
+            ),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::FORBIDDEN,
+            "{}",
+            String::from_utf8_lossy(&body)
+        );
+    }
+    assert!(h
+        .state
+        .kernel
+        .config_ref()
+        .task_board
+        .scheduler_plugin
+        .is_none());
+    let (status, _) = send(
+        h.app.clone(),
+        auth_post_json(
+            "/api/config/set",
+            serde_json::json!({ "path": "task_board.pending_grace_secs", "value": 45 }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        h.state.kernel.config_ref().task_board.pending_grace_secs,
+        45
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn config_set_rejects_path_traversal() {
     let h = boot_router_with_api_key(API_KEY).await;
     let (status, _) = send(

@@ -619,6 +619,13 @@ pub fn ui_options_overlay(
 /// Module-level rather than a function-local `const` so the build-time guard can check every entry against the real `KernelConfig` schema instead of restating the list (#6605).
 /// See `manage::writable_allowlist_backing_field_tests::every_writable_allowlist_entry_has_a_backing_config_field`.
 const WRITABLE_EXACT_PATHS: &[&str] = &[
+    // Scheduler plugin settings stay file-only because they control process execution.
+    "task_board.claim_ttl_secs",
+    "task_board.sweep_interval_secs",
+    "task_board.max_retries",
+    "task_board.assignee_wake",
+    "task_board.pending_grace_secs",
+    "task_board.wake_backoff_max_secs",
     // `ui.theme`, `ui.locale`, `ui.timezone`, and `ui.language` headed this list from #4113 under the comment "UI / locale (no security impact)", and were removed in #6605.
     // `KernelConfig` has no `ui` field and never had one, so every write against those paths was accepted, dropped a `[ui]` table into `config.toml`, and was then discarded by the next load (`KernelConfig` does not set `deny_unknown_fields`) — the value was never applied and never appeared in `GET /api/config`.
     // Nothing posted them either: the dashboard keeps theme, language, and sidebar state in browser `localStorage` via zustand `persist` (key `librefang-ui-storage`), which is why the dead paths went unnoticed for so long.
@@ -740,8 +747,7 @@ const WRITABLE_SECTION_PREFIXES: &[&str] = &[
     "health_check.",
     "heartbeat.",
     "notification.",
-    // Task board, prompt intelligence, context engine.
-    "task_board.",
+    // Prompt intelligence and context engine.
     "prompt_intelligence.",
     "context_engine.",
     // Auto-dream scheduler.

@@ -41,7 +41,7 @@ def load_policy(path: Path) -> Policy:
     policy = Policy(
         max_active_tasks=int(raw["max_active_tasks"]),
         max_wakes_per_cycle=int(raw["max_wakes_per_cycle"]),
-        unclaimed_wake_hold_secs=int(raw["unclaimed_wake_hold_secs"]),
+        unclaimed_wake_hold_secs=int(raw.get("unclaimed_wake_hold_secs", 120)),
         split_enabled=bool(raw["split_enabled"]),
         max_task_chars=int(raw["max_task_chars"]),
         compound_marker_threshold=int(raw["compound_marker_threshold"]),
