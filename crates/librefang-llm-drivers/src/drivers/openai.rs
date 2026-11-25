@@ -6844,6 +6844,24 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn custom_provider_factory_honors_zero_retries() {
+        let _guard = crate::backoff::enable_test_zero_backoff();
+        let base_url = spawn_drop_then_ok_server(1).await;
+        let driver = super::super::create_driver(&super::super::DriverConfig {
+            provider: "test-custom-provider".into(),
+            base_url: Some(base_url),
+            max_retries: 0,
+            ..Default::default()
+        })
+        .unwrap();
+        let error = driver
+            .complete(transport_retry_request())
+            .await
+            .unwrap_err();
+        assert!(matches!(error, LlmError::Http(_)), "{error:?}");
+    }
+
     // The default driver (max_retries = 3) keeps retrying past several
     // consecutive transport errors and still succeeds — exercising the loop
     // body more than once, not just the first re-attempt.
