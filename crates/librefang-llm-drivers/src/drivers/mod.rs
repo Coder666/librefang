@@ -109,13 +109,14 @@ impl DriverCache {
         let key_hash = hex::encode(&digest[..16]);
 
         format!(
-            "{}|{}|{}|{}|{}|{}",
+            "{}|{}|{}|{}|{}|{}|{max_retries}",
             config.provider,
             key_hash,
             config.base_url.as_deref().unwrap_or(""),
             config.proxy_url.as_deref().unwrap_or(""),
-            config.request_timeout_secs.unwrap_or(0),
+            format_args!("{:?}", config.request_timeout_secs),
             config.message_timeout_secs,
+            max_retries = config.max_retries,
         )
     }
 }
@@ -915,6 +916,7 @@ pub fn create_driver(config: &DriverConfig) -> Result<Arc<dyn LlmDriver>, LlmErr
                 config.request_timeout_secs,
             )
             .with_emit_caller_trace_headers(config.emit_caller_trace_headers)
+            .with_max_retries(config.max_retries)
             // A custom provider's own name is the only statement of which runtime it is; `llamacpp` and its spellings opt into llama.cpp's samplers (#8290).
             .with_sampler_dialect(openai::LocalSamplerDialect::for_provider(provider)),
         ));
@@ -1205,7 +1207,7 @@ mod tests {
         let key = DriverCache::cache_key(&cfg);
         // Shape: "openai|<hex>|||0|300"
         let parts: Vec<&str> = key.split('|').collect();
-        assert_eq!(parts.len(), 6, "cache key shape: {key}");
+        assert_eq!(parts.len(), 7, "cache key shape: {key}");
         let hash_segment = parts[1];
         assert_eq!(
             hash_segment.len(),
@@ -1252,6 +1254,19 @@ mod tests {
         };
 
         assert_ne!(DriverCache::cache_key(&a), DriverCache::cache_key(&b));
+    }
+
+    #[test]
+    fn cache_key_distinguishes_explicit_zero_from_default_request_timeout() {
+        let default_timeout = DriverConfig::default();
+        let zero_timeout = DriverConfig {
+            request_timeout_secs: Some(0),
+            ..default_timeout.clone()
+        };
+        assert_ne!(
+            DriverCache::cache_key(&default_timeout),
+            DriverCache::cache_key(&zero_timeout)
+        );
     }
 
     #[test]
@@ -1310,6 +1325,22 @@ mod tests {
     #[test]
     fn test_unknown_provider_returns_none() {
         assert!(provider_defaults("nonexistent").is_none());
+    }
+
+    #[test]
+    fn cache_key_distinguishes_retry_budgets() {
+        let no_retries = DriverConfig {
+            max_retries: 0,
+            ..Default::default()
+        };
+        let one_retry = DriverConfig {
+            max_retries: 1,
+            ..no_retries.clone()
+        };
+        assert_ne!(
+            DriverCache::cache_key(&no_retries),
+            DriverCache::cache_key(&one_retry)
+        );
     }
 
     #[test]

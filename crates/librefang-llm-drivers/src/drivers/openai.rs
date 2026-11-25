@@ -118,13 +118,23 @@ impl OpenAIDriver {
         proxy_url: Option<&str>,
         request_timeout_secs: Option<u64>,
     ) -> Self {
-        let client = match proxy_url {
-            Some(url) => librefang_http::proxied_client_with_override(url).unwrap_or_else(|e| {
-                tracing::warn!(url, error = %e, "Invalid per-provider proxy URL, using global proxy");
-                librefang_http::proxied_client()
-            }),
-            None => librefang_http::proxied_client(),
+        let client_builder = match proxy_url {
+            Some(url) => librefang_http::proxied_client_builder_with_override(url)
+                .unwrap_or_else(|e| {
+                    tracing::warn!(url, error = %e, "Invalid per-provider proxy URL, using global proxy");
+                    librefang_http::proxied_client_builder()
+                }),
+            None => librefang_http::proxied_client_builder(),
         };
+        // Slow providers can spend most of their request budget before sending
+        // response headers or the first streamed token.
+        let client_builder = match request_timeout_secs {
+            Some(secs) => client_builder.read_timeout(std::time::Duration::from_secs(secs)),
+            None => client_builder,
+        };
+        let client = client_builder
+            .build()
+            .expect("OpenAI HTTP client with proxy/TLS config should always build");
         // #3477: self-hosted OpenAI-compat endpoints (Ollama, etc.) often
         // include a trailing slash; concatenating "/chat/completions" then
         // produces "//chat/completions" which most servers 504 on.
@@ -843,6 +853,50 @@ fn merge_extra_body(
         if extra_nested && !extra_effort {
             obj.remove("reasoning_effort");
         }
+    }
+}
+
+/// SenseNova-Loop's chat template requires a user query after provider-specific message conversion.
+fn validate_sensenova_user_query(body: &serde_json::Value) -> Result<(), LlmError> {
+    let model = body["model"].as_str().unwrap_or_default();
+    let model = model.rsplit('/').next().unwrap_or_default();
+    if !model.to_ascii_lowercase().starts_with("sensenova-loop-") {
+        return Ok(());
+    }
+
+    let is_query_text = |text: &str| {
+        let text = text.trim();
+        !(text.is_empty()
+            || text.starts_with("<tool_response>") && text.ends_with("</tool_response>"))
+    };
+    let has_user_query = body["messages"].as_array().is_some_and(|messages| {
+        messages.iter().any(|message| {
+            if message["role"] != "user" {
+                return false;
+            }
+            match &message["content"] {
+                serde_json::Value::String(text) => is_query_text(text),
+                serde_json::Value::Array(parts) => {
+                    parts.iter().any(|part| match part["type"].as_str() {
+                        Some("text") => part["text"].as_str().is_some_and(is_query_text),
+                        Some("image_url") => part["image_url"]["url"]
+                            .as_str()
+                            .is_some_and(|url| !url.trim().is_empty()),
+                        _ => false,
+                    })
+                }
+                _ => false,
+            }
+        })
+    });
+    if has_user_query {
+        Ok(())
+    } else {
+        Err(LlmError::Api {
+            status: 400,
+            message: "SenseNova-Loop requires a user message with content. Supply a user query or restore it before retrying.".into(),
+            code: None,
+        })
     }
 }
 
@@ -1821,6 +1875,7 @@ impl LlmDriver for OpenAIDriver {
             let mut body =
                 serde_json::to_value(&oai_request).map_err(|e| LlmError::Http(e.to_string()))?;
             merge_extra_body(&oai_request.extra_body, &mut body);
+            validate_sensenova_user_query(&body)?;
 
             let mut req_builder = self
                 .client
@@ -2274,6 +2329,7 @@ impl LlmDriver for OpenAIDriver {
             let mut body =
                 serde_json::to_value(&oai_request).map_err(|e| LlmError::Http(e.to_string()))?;
             merge_extra_body(&oai_request.extra_body, &mut body);
+            validate_sensenova_user_query(&body)?;
 
             let mut req_builder = self
                 .client
@@ -6053,6 +6109,57 @@ mod tests {
     /// sharing a message with a `ToolResult` is silently dropped — the notice
     /// never reached OpenAI / Groq / Moonshot. Folding it into the `ToolResult`
     /// `content` string (the shape this test pins) survives instead.
+    #[tokio::test]
+    async fn sensenova_missing_user_query_is_rejected_before_sending() {
+        let server = wiremock::MockServer::start().await;
+        let driver = OpenAIDriver::new(String::new(), server.uri());
+        let mut request = transport_retry_request();
+        request.system = Some("Task instructions".into());
+        request.extra_body = Some(BTreeMap::from([
+            (
+                "model".into(),
+                serde_json::json!("SenseNova-SI/SenseNova-Loop-9B"),
+            ),
+            (
+                "messages".into(),
+                serde_json::json!([{"role": "system", "content": "Task instructions"}]),
+            ),
+        ]));
+
+        let error = driver.complete(request.clone()).await.unwrap_err();
+        assert!(matches!(error, LlmError::Api { status: 400, .. }));
+        let (tx, _rx) = tokio::sync::mpsc::channel(8);
+        let error = driver.stream(request, tx).await.unwrap_err();
+        assert!(matches!(error, LlmError::Api { status: 400, .. }));
+        assert!(server.received_requests().await.unwrap().is_empty());
+    }
+
+    #[test]
+    fn sensenova_user_query_validation_preserves_valid_payloads() {
+        let body = |model, messages| serde_json::json!({ "model": model, "messages": messages });
+        let invalid = [
+            serde_json::json!([]),
+            serde_json::json!([{"role": "user", "content": "  "}]),
+            serde_json::json!([{"role": "tool", "content": "tool output"}]),
+            serde_json::json!([{"role": "user", "content": "<tool_response>output</tool_response>"}]),
+        ];
+        for messages in invalid {
+            assert!(validate_sensenova_user_query(&body("sensenova-loop-9b", messages)).is_err());
+        }
+        for messages in [
+            serde_json::json!([{"role": "user", "content": "Continue the task"}]),
+            serde_json::json!([{"role": "user", "content": [{"type": "text", "text": "Continue the task"}]}]),
+            serde_json::json!([{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "https://example.invalid/image.png"}}]}]),
+        ] {
+            assert!(validate_sensenova_user_query(&body("sensenova-loop-9b", messages)).is_ok());
+        }
+        assert!(validate_sensenova_user_query(&body(
+            "some-other-model",
+            serde_json::json!([{"role": "system", "content": "Instructions"}]),
+        ))
+        .is_ok());
+    }
+
     #[test]
     fn build_request_folds_dev_loop_notice_into_tool_result_content() {
         use librefang_types::message::Message;
@@ -6825,6 +6932,24 @@ mod tests {
         assert_eq!(resp.text(), "ok");
     }
 
+    #[tokio::test]
+    async fn custom_provider_factory_honors_zero_retries() {
+        let _guard = crate::backoff::enable_test_zero_backoff();
+        let base_url = spawn_drop_then_ok_server(1).await;
+        let driver = super::super::create_driver(&super::super::DriverConfig {
+            provider: "test-custom-provider".into(),
+            base_url: Some(base_url),
+            max_retries: 0,
+            ..Default::default()
+        })
+        .unwrap();
+        let error = driver
+            .complete(transport_retry_request())
+            .await
+            .unwrap_err();
+        assert!(matches!(error, LlmError::Http(_)), "{error:?}");
+    }
+
     // `max_retries = 0` disables the in-driver retry loop, so the first
     // transport error propagates without a second attempt — proving both that
     // the cap is honoured and that 0 is a meaningful disable value.
@@ -6841,6 +6966,32 @@ mod tests {
         assert!(
             matches!(err, LlmError::Http(_)),
             "expected a transport (Http) error, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn configured_provider_read_timeout_bounds_wait_for_headers() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (_socket, _) = listener.accept().await.unwrap();
+            std::future::pending::<()>().await;
+        });
+        let driver = OpenAIDriver::with_proxy_and_timeout(
+            String::new(),
+            format!("http://{address}"),
+            None,
+            Some(1),
+        )
+        .with_max_retries(0);
+        let mut request = transport_retry_request();
+        request.timeout_secs = Some(30);
+        let outcome =
+            tokio::time::timeout(std::time::Duration::from_secs(5), driver.complete(request)).await;
+        server.abort();
+        assert!(
+            matches!(outcome, Ok(Err(LlmError::Http(_)))),
+            "the configured read timeout must fire before the outer test deadline: {outcome:?}"
         );
     }
 

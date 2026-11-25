@@ -436,6 +436,29 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    async fn subprocess_can_write_before_consuming_a_large_request() {
+        let agent = AgentId::new();
+        let payload = String::from_utf8(response(agent, "task-a", "wake")).unwrap();
+        let (_directory, mut config) = executable_plugin(
+            "head -c 262144 /dev/zero | tr '\\000' ' '\ncat >/dev/null\nprintf '%s' \"$1\"",
+            vec![payload],
+        );
+        config.max_response_bytes = 512 * 1024;
+        let pending =
+            [serde_json::json!({ "id": "task-a", "description": "x".repeat(256 * 1024) })];
+        let selected = apply(
+            &config,
+            vec![matched(agent, "task-a")],
+            &pending,
+            &BTreeMap::new(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(selected.len(), 1);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
     async fn subprocess_timeout_is_reported() {
         let agent = AgentId::new();
         let (_directory, mut config) = executable_plugin("cat >/dev/null\nsleep 2", vec![]);
