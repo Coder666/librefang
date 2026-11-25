@@ -380,8 +380,13 @@ async fn patch_with_disallowed_transition_on_existing_task_is_409_not_404() {
         "a second cancel is a conflict, not a missing task: {body}"
     );
 
-    let (status, _) = send(&h.app, auth_get(&format!("/api/tasks/{id}"))).await;
+    let (status, body) = send(&h.app, patch_status(&id, "pending")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, task) = send(&h.app, auth_get(&format!("/api/tasks/{id}"))).await;
     assert_eq!(status, StatusCode::OK, "the task is still readable");
+    assert_eq!(task["status"], "pending");
+    assert!(task["claimed_at"].is_null());
+    assert!(task["completed_at"].is_null());
 
     let (status, _) = send(&h.app, patch_status("does-not-exist", "cancelled")).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
