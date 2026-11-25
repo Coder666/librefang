@@ -1387,6 +1387,9 @@ async fn run_agent_loop_inner(
         driver.as_ref(),
         &session.messages,
         web_search_echo_policy,
+        kernel
+            .as_ref()
+            .and_then(|kernel| kernel.unified_inference_timeout_secs()),
     )
     .await;
     accumulate_token_usage(&mut total_usage, &augment_usage);

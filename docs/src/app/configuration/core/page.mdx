@@ -434,20 +434,17 @@ For deeper detail (what gets trimmed, the safe-trim algorithm, where the value f
 
 ### `[provider_request_timeout_secs]`
 
-Per-provider HTTP request timeout for LLM driver calls. Without an entry, the driver uses its built-in default (typically 60 s for the OpenAI-compatible driver, longer for Ollama).
+Set a positive `"*"` value in seconds to use one timeout across LibreFang inference paths.
 
 ```toml
 [provider_request_timeout_secs]
-ollama = 300        # local model loading + first-token cold start
-anthropic = 120
-openai = 90
+"*" = 900
 ```
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| (provider id) → `u64` | map | `{}` | Per-provider total request timeout in seconds. Applies to both `complete()` and `stream()` paths. The driver cache key includes the timeout so changing it triggers fresh client construction (no cross-timeout cache hits). |
+This overrides provider-specific entries, the CLI model timeout, and the shorter built-in limits for proactive memory, web query generation, session summaries, and skill-workshop reviews.
+If the wildcard is absent, provider-specific entries and existing auxiliary defaults continue to apply.
+This configures inference inside LibreFang. Reverse proxies and inference servers enforce their own limits.
 
-Per-model overrides are also possible at the agent level via `agent.toml: model.request_timeout_secs` for fine-grained tuning of slow long-context models.
 
 ---
 

@@ -396,3 +396,26 @@ fn channels_config_default_has_50mb_max() {
 fn broadcast_config_default_roundtrips_through_toml() {
     assert_default_roundtrip::<BroadcastConfig>("BroadcastConfig");
 }
+
+#[test]
+fn unified_inference_timeout_takes_precedence_for_every_provider() {
+    let mut config: librefang_types::config::KernelConfig = toml::from_str(
+        r#"
+[provider_request_timeout_secs]
+"*" = 900
+openai = 45
+"#,
+    )
+    .unwrap();
+    assert_eq!(config.inference_timeout_secs("openai"), Some(900));
+    assert_eq!(config.inference_timeout_secs("apex-olla"), Some(900));
+    assert_eq!(config.inference_message_timeout_secs(), 900);
+
+    config.provider_request_timeout_secs.remove("*");
+    assert_eq!(config.inference_timeout_secs("openai"), Some(45));
+    assert_eq!(config.inference_timeout_secs("apex-olla"), None);
+    assert_eq!(
+        config.inference_message_timeout_secs(),
+        config.default_model.message_timeout_secs
+    );
+}

@@ -111,6 +111,7 @@ async fn generate_search_queries(
     session_messages: &[Message],
     user_message: &str,
     reasoning_echo_policy: librefang_types::model_catalog::ReasoningEchoPolicy,
+    inference_timeout_secs: Option<u64>,
 ) -> (Option<Vec<String>>, TokenUsage) {
     // Build a compact conversation summary from the last few messages
     let recent: Vec<&Message> = session_messages
@@ -138,6 +139,7 @@ async fn generate_search_queries(
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
     let system = format!("{SEARCH_QUERY_GEN_PROMPT}{today}");
 
+    let timeout_secs = inference_timeout_secs.unwrap_or(15);
     let request = CompletionRequest {
         model: strip_provider_prefix(&manifest.model.model, &manifest.model.provider),
         messages: std::sync::Arc::new(vec![Message::user(format!(
@@ -164,7 +166,7 @@ async fn generate_search_queries(
         // requirement for json_object mode). Providers that don't
         // honour the flag ignore it without error.
         response_format: Some(ResponseFormat::Json),
-        timeout_secs: Some(15),
+        timeout_secs: Some(timeout_secs),
         extra_body: None,
         agent_id: None,
         session_id: None,
@@ -174,20 +176,22 @@ async fn generate_search_queries(
         ..Default::default()
     };
 
-    let response =
-        match tokio::time::timeout(std::time::Duration::from_secs(15), driver.complete(request))
-            .await
-        {
-            Ok(Ok(resp)) => resp,
-            Ok(Err(e)) => {
-                debug!("Search query generation LLM error: {e}");
-                return (None, TokenUsage::default());
-            }
-            Err(_) => {
-                debug!("Search query generation timed out");
-                return (None, TokenUsage::default());
-            }
-        };
+    let response = match tokio::time::timeout(
+        std::time::Duration::from_secs(timeout_secs),
+        driver.complete(request),
+    )
+    .await
+    {
+        Ok(Ok(resp)) => resp,
+        Ok(Err(e)) => {
+            debug!("Search query generation LLM error: {e}");
+            return (None, TokenUsage::default());
+        }
+        Err(_) => {
+            debug!("Search query generation timed out");
+            return (None, TokenUsage::default());
+        }
+    };
 
     (parse_search_queries(&response.text()), response.usage)
 }
@@ -253,6 +257,7 @@ pub(super) async fn web_search_augment(
     driver: &dyn LlmDriver,
     session_messages: &[Message],
     reasoning_echo_policy: librefang_types::model_catalog::ReasoningEchoPolicy,
+    inference_timeout_secs: Option<u64>,
 ) -> (Option<String>, TokenUsage) {
     if !should_augment_web_search(manifest) {
         return (None, TokenUsage::default());
@@ -269,6 +274,7 @@ pub(super) async fn web_search_augment(
         session_messages,
         user_message,
         reasoning_echo_policy,
+        inference_timeout_secs,
     )
     .await;
     let queries = match generated {
@@ -460,6 +466,7 @@ mod tests {
             &[],
             "what's the weather in tokyo?",
             librefang_types::model_catalog::ReasoningEchoPolicy::None,
+            None,
         )
         .await;
 
@@ -487,6 +494,7 @@ mod tests {
             &[],
             "hello there",
             librefang_types::model_catalog::ReasoningEchoPolicy::None,
+            None,
         )
         .await;
 
@@ -506,6 +514,7 @@ mod tests {
             &[],
             "rust parser",
             librefang_types::model_catalog::ReasoningEchoPolicy::None,
+            None,
         )
         .await
         .0;
@@ -524,6 +533,7 @@ mod tests {
             &[],
             "rust parser",
             librefang_types::model_catalog::ReasoningEchoPolicy::None,
+            None,
         )
         .await
         .0;
@@ -542,6 +552,7 @@ mod tests {
             &[],
             "rust parser",
             librefang_types::model_catalog::ReasoningEchoPolicy::None,
+            None,
         )
         .await
         .0;
@@ -560,6 +571,7 @@ mod tests {
             &[],
             "rust parser",
             librefang_types::model_catalog::ReasoningEchoPolicy::None,
+            None,
         )
         .await
         .0;

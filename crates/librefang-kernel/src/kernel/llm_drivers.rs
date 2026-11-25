@@ -340,13 +340,10 @@ impl LibreFangKernel {
             vertex_ai: cfg.vertex_ai.clone(),
             azure_openai: cfg.azure_openai.clone(),
             skip_permissions: true,
-            message_timeout_secs: cfg.default_model.message_timeout_secs,
+            message_timeout_secs: cfg.inference_message_timeout_secs(),
             mcp_bridge: Some(build_mcp_bridge_cfg(&cfg)),
             proxy_url: cfg.provider_proxy_urls.get(agent_provider).cloned(),
-            request_timeout_secs: cfg
-                .provider_request_timeout_secs
-                .get(agent_provider)
-                .copied(),
+            request_timeout_secs: cfg.inference_timeout_secs(agent_provider),
             emit_caller_trace_headers: cfg.telemetry.emit_caller_trace_headers,
             max_retries: cfg
                 .provider_max_retries
@@ -591,12 +588,9 @@ impl LibreFangKernel {
                     azure_openai: cfg.azure_openai.clone(),
                     mcp_bridge: Some(build_mcp_bridge_cfg(&cfg)),
                     skip_permissions: true,
-                    message_timeout_secs: cfg.default_model.message_timeout_secs,
+                    message_timeout_secs: cfg.inference_message_timeout_secs(),
                     proxy_url: cfg.provider_proxy_urls.get(&fb_provider).cloned(),
-                    request_timeout_secs: cfg
-                        .provider_request_timeout_secs
-                        .get(&fb_provider)
-                        .copied(),
+                    request_timeout_secs: cfg.inference_timeout_secs(&fb_provider),
                     emit_caller_trace_headers: cfg.telemetry.emit_caller_trace_headers,
                     max_retries: cfg
                         .provider_max_retries

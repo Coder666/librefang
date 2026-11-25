@@ -57,6 +57,10 @@ impl LibreFangKernel {
 }
 
 impl kernel_handle::CatalogQuery for LibreFangKernel {
+    fn unified_inference_timeout_secs(&self) -> Option<u64> {
+        self.config_ref().unified_inference_timeout_secs()
+    }
+
     fn reasoning_echo_policy_for(&self, model: &str) -> ReasoningEchoPolicy {
         self.lookup_reasoning_echo_policy(model)
     }

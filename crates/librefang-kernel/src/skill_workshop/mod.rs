@@ -504,6 +504,7 @@ async fn run_llm_review(
         agent_id: agent_id_str.as_str(),
         session_id: Some(session_id_str.as_str()),
         candidate_id: Some(candidate_id),
+        inference_timeout_secs: aux.unified_inference_timeout_secs(),
     };
     let echo_policy = kernel.lookup_reasoning_echo_policy(&model);
     llm_review::review_candidate(resolution.driver, &model, hit, attribution, echo_policy).await

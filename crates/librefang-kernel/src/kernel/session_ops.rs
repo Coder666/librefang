@@ -1362,6 +1362,9 @@ async fn build_session_summary(
     use librefang_types::message::Message;
 
     let resolution = aux.resolve(AuxTask::SessionSummary);
+    let timeout_secs = aux
+        .unified_inference_timeout_secs()
+        .unwrap_or(SESSION_SUMMARY_LLM_TIMEOUT_SECS);
 
     if resolution.used_primary {
         // No aux chain resolved — keep the on-reset write useful but
@@ -1416,7 +1419,7 @@ async fn build_session_summary(
         cache_ttl: None,
         prompt_cache_strategy: None,
         response_format: None,
-        timeout_secs: Some(SESSION_SUMMARY_LLM_TIMEOUT_SECS),
+        timeout_secs: Some(timeout_secs),
         extra_body: None,
         agent_id: Some(agent_id.to_string()),
         session_id: Some(session_id.0.to_string()),
@@ -1428,7 +1431,7 @@ async fn build_session_summary(
     invoke_summary_driver(
         resolution.driver.as_ref(),
         req,
-        std::time::Duration::from_secs(SESSION_SUMMARY_LLM_TIMEOUT_SECS),
+        std::time::Duration::from_secs(timeout_secs),
         agent_id,
         session_id,
         messages,
