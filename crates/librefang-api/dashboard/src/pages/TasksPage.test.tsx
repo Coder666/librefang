@@ -218,6 +218,22 @@ describe("TasksPage", () => {
     expect(screen.getByText("agent-alpha · Pending task title")).toBeInTheDocument();
   });
 
+  it("resumes suspended agents without touching running agents", () => {
+    const mutate = vi.fn();
+    m(useSetAgentsPaused).mockReturnValue(makeMutation({ mutate }));
+    useAgentsMock.mockReturnValue(makeQuery([
+      { ...SAMPLE_AGENTS[0], state: "running" },
+      { ...SAMPLE_AGENTS[1], state: "suspended" },
+    ]));
+    renderPage();
+    fireEvent.click(screen.getByRole("button", { name: "tasks.resume_agents" }));
+    fireEvent.click(screen.getByRole("button", { name: "tasks.resume_agents_confirm" }));
+    expect(mutate).toHaveBeenCalledWith(
+      { paused: false, agentIds: [SAMPLE_AGENTS[1].id] },
+      expect.any(Object),
+    );
+  });
+
   describe("column rendering", () => {
     it("renders all four status columns", () => {
       renderPage();
