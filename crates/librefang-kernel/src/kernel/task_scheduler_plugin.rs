@@ -85,7 +85,7 @@ pub(super) fn candidates(
                     pending_count: parse_pending_count(&matched.message).unwrap_or(1),
                 })
             }
-            TriggerMatchSource::Registered(_) => None,
+            TriggerMatchSource::Registered(_) | TriggerMatchSource::TaskBoardSplit { .. } => None,
         })
         .collect()
 }
@@ -208,7 +208,7 @@ fn apply_response(matches: &[TriggerMatch], output: &[u8]) -> Result<Vec<Trigger
             TriggerMatchSource::TaskBoardAssigneeWake { task_id } => {
                 Some(((matched.agent_id.to_string(), task_id.clone()), matched))
             }
-            TriggerMatchSource::Registered(_) => None,
+            TriggerMatchSource::Registered(_) | TriggerMatchSource::TaskBoardSplit { .. } => None,
         })
         .collect();
     let mut seen = HashSet::new();
@@ -230,6 +230,7 @@ fn apply_response(matches: &[TriggerMatch], output: &[u8]) -> Result<Vec<Trigger
         let mut matched = (*original).clone();
         if matches!(decision.action, SchedulerAction::Split) {
             matched.message = split_prompt(&key.1);
+            matched.source = TriggerMatchSource::TaskBoardSplit { task_id: key.1 };
         }
         selected.push(matched);
     }
@@ -301,6 +302,12 @@ mod tests {
         let agent = AgentId::new();
         let input = vec![matched(agent, "task-a")];
         let result = apply_response(&input, &response(agent, "task-a", "split")).unwrap();
+        assert_eq!(
+            result[0].source,
+            TriggerMatchSource::TaskBoardSplit {
+                task_id: "task-a".to_owned()
+            }
+        );
         assert!(result[0].message.contains("break it into small"));
         assert!(result[0].message.contains("task-a"));
     }

@@ -96,6 +96,8 @@ pub async fn task_queue_status(
             let mut completed = 0u64;
             let mut failed = 0u64;
             let mut cancelled = 0u64;
+            let mut needs_split = 0u64;
+            let mut superseded = 0u64;
             let mut total = 0u64;
             for (status, count) in &counts {
                 total += count;
@@ -106,6 +108,8 @@ pub async fn task_queue_status(
                     "failed" => failed += count,
                     // Written by `PATCH /api/tasks/{id}` and by TTL expiry of stale pending tasks, so it is a normal terminal status, not drift.
                     "cancelled" => cancelled += count,
+                    "needs_split" => needs_split += count,
+                    "superseded" => superseded += count,
                     unknown => {
                         // Still reported, but once per status rather than once per row — the old warning named the offending task id, which a `GROUP BY` cannot carry.
                         // The count is the more useful half: it says how far the drift has spread.
@@ -126,6 +130,8 @@ pub async fn task_queue_status(
                     "completed": completed,
                     "failed": failed,
                     "cancelled": cancelled,
+                    "needs_split": needs_split,
+                    "superseded": superseded,
                 })),
             )
         }

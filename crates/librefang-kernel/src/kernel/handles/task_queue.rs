@@ -9,6 +9,64 @@ use librefang_types::agent::AgentId;
 
 use super::super::LibreFangKernel;
 
+impl LibreFangKernel {
+    pub(in crate::kernel) async fn handoff_task_scope(
+        &self,
+        task_id: &str,
+        owner: &str,
+        worker: AgentId,
+        manager: &str,
+        note: &str,
+        allow_pending: bool,
+    ) -> Result<String, kernel_handle::KernelOpError> {
+        use kernel_handle::KernelOpError;
+        let entry = match AgentId::from_str(manager) {
+            Ok(id) => self.agents.registry.get(id),
+            Err(_) => self.agents.registry.find_by_name(manager),
+        }
+        .ok_or_else(|| KernelOpError::AgentNotFound(manager.to_owned()))?;
+        if entry.id == worker
+            || ["task_claim", "task_complete", "task_status"]
+                .iter()
+                .any(|tool| {
+                    !super::super::triggers_and_workflow::task_tool_allowed(&entry.manifest, tool)
+                })
+            || note.trim().is_empty()
+            || note.len() > 4096
+        {
+            return Err(KernelOpError::Conflict(
+                "A split requires a separate manager with task_claim, task_status, and task_complete, plus a reason of 1 to 4096 bytes".into(),
+            ));
+        }
+        let manager_id = entry.id.to_string();
+        let (id, created) = self
+            .memory
+            .substrate
+            .task_request_split(task_id, owner, &manager_id, note.trim(), allow_pending)
+            .await?;
+        if created {
+            self.publish_decomposition_task(&id, "Decompose task scope", &manager_id)
+                .await;
+        }
+        Ok(id)
+    }
+
+    async fn publish_decomposition_task(&self, id: &str, title: &str, assignee: &str) {
+        use librefang_types::event::{Event, EventPayload, EventTarget, SystemEvent};
+        self.publish_event(Event::new(
+            AgentId::new(),
+            EventTarget::Broadcast,
+            EventPayload::System(SystemEvent::TaskPosted {
+                task_id: id.to_owned(),
+                title: title.to_owned(),
+                assigned_to: Some(assignee.to_owned()),
+                created_by: None,
+            }),
+        ))
+        .await;
+    }
+}
+
 #[async_trait::async_trait]
 impl kernel_handle::TaskQueue for LibreFangKernel {
     async fn task_post(
@@ -206,6 +264,82 @@ impl kernel_handle::TaskQueue for LibreFangKernel {
         self.publish_event(event).await;
 
         Ok(())
+    }
+
+    async fn task_request_split(
+        &self,
+        agent_id: &str,
+        task_id: &str,
+        note: &str,
+    ) -> Result<String, kernel_handle::KernelOpError> {
+        use kernel_handle::KernelOpError;
+        let worker = AgentId::from_str(agent_id)
+            .map_err(|_| KernelOpError::AgentNotFound(agent_id.to_owned()))?;
+        let manager = self
+            .config_ref()
+            .task_board
+            .scheduler_plugin
+            .as_ref()
+            .and_then(|plugin| plugin.decomposition_manager.clone())
+            .ok_or_else(|| KernelOpError::Conflict("No decomposition manager configured".into()))?;
+        self.handoff_task_scope(task_id, agent_id, worker, &manager, note, false)
+            .await
+    }
+
+    async fn task_finish_split(
+        &self,
+        agent_id: &str,
+        ticket_id: &str,
+        children: Vec<kernel_handle::TaskSplitChild>,
+    ) -> Result<Vec<String>, kernel_handle::KernelOpError> {
+        use kernel_handle::KernelOpError;
+        if children.is_empty()
+            || children.len() > 8
+            || children.iter().any(|child| {
+                [
+                    (child.title.as_str(), 200),
+                    (child.description.as_str(), 12000),
+                    (child.acceptance_check.as_str(), 4000),
+                ]
+                .iter()
+                .any(|(value, max)| value.trim().is_empty() || value.len() > *max)
+            })
+        {
+            return Err(KernelOpError::Conflict(
+                "Supply one to eight children with a title, description, and acceptance check"
+                    .into(),
+            ));
+        }
+        let children = children
+            .into_iter()
+            .map(|child| {
+                (
+                    child.title,
+                    format!(
+                        "{}\n\nAcceptance check: {}",
+                        child.description, child.acceptance_check
+                    ),
+                )
+            })
+            .collect();
+        let caps = librefang_memory::TaskQueueCaps::from(&self.config_ref().queue);
+        let (ids, created) = self
+            .memory
+            .substrate
+            .task_finish_split(ticket_id, agent_id, children, caps)
+            .await?;
+        if created {
+            for id in &ids {
+                if let Ok(Some(task)) = self.memory.substrate.task_get(id).await {
+                    if let (Some(title), Some(assignee)) =
+                        (task["title"].as_str(), task["assigned_to"].as_str())
+                    {
+                        self.publish_decomposition_task(id, title, assignee).await;
+                    }
+                }
+            }
+        }
+        Ok(ids)
     }
 
     async fn task_list(

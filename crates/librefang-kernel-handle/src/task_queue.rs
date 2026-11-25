@@ -26,6 +26,15 @@ pub struct TaskPostOptions {
     pub timeout_secs: Option<u32>,
 }
 
+/// A child deliverable and its acceptance criteria for an atomic task split.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskSplitChild {
+    pub title: String,
+    pub description: String,
+    pub acceptance_check: String,
+}
+
 #[async_trait]
 pub trait TaskQueue: Send + Sync {
     /// Post a task to the shared task queue. Returns the task ID.
@@ -50,6 +59,26 @@ pub trait TaskQueue: Send + Sync {
         task_id: &str,
         result: &str,
     ) -> Result<(), KernelOpError>;
+
+    /// Hand a claimed task to the configured decomposition manager.
+    async fn task_request_split(
+        &self,
+        _agent_id: &str,
+        _task_id: &str,
+        _note: &str,
+    ) -> Result<String, KernelOpError> {
+        Err("Task decomposition is unavailable".into())
+    }
+
+    /// Save all children and close the decomposition handoff atomically.
+    async fn task_finish_split(
+        &self,
+        _agent_id: &str,
+        _ticket_id: &str,
+        _children: Vec<TaskSplitChild>,
+    ) -> Result<Vec<String>, KernelOpError> {
+        Err("Task decomposition is unavailable".into())
+    }
 
     /// List tasks, optionally filtered by status.
     async fn task_list(

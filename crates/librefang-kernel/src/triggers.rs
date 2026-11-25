@@ -256,6 +256,8 @@ pub enum TriggerMatchSource {
     /// The kernel synthesized this match for the assignee of a `TaskPosted` event that no stored trigger currently covers (issue #6728).
     /// Carries the task id so the wake is traceable to the task that caused it, and so `SessionId::for_task_wake` has a stable key.
     TaskBoardAssigneeWake { task_id: String },
+    /// The scheduler marked this task for decomposition.
+    TaskBoardSplit { task_id: String },
 }
 
 impl std::fmt::Display for TriggerMatchSource {
@@ -263,6 +265,7 @@ impl std::fmt::Display for TriggerMatchSource {
         match self {
             Self::Registered(id) => write!(f, "trigger:{id}"),
             Self::TaskBoardAssigneeWake { task_id } => write!(f, "assignee_wake:{task_id}"),
+            Self::TaskBoardSplit { task_id } => write!(f, "task_split:{task_id}"),
         }
     }
 }

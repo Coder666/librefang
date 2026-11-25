@@ -645,14 +645,28 @@ use instead of web_fetch + file_write (which round-trips the entire body through
             },
             ToolDefinition {
                 name: tool_name::TASK_COMPLETE.to_string(),
-                description: "Mark a previously claimed task as completed with a result.".to_string(),
+                description: "Complete a claimed task with a result, hand off an oversized task, or submit a decomposition plan.".to_string(),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
                         "task_id": { "type": "string", "description": "The task ID to complete" },
-                        "result": { "type": "string", "description": "The result or outcome of the task" }
+                        "result": { "type": "string", "description": "Outcome of regular execution" },
+                        "split_reason": { "type": "string", "description": "Why the claimed task is too broad, including blockers or progress the manager should preserve" },
+                        "split_children": {
+                            "type": "array", "minItems": 1, "maxItems": 8,
+                            "description": "For the manager's claimed decomposition ticket. Submit all independently verifiable deliverables together.",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "title": { "type": "string" },
+                                    "description": { "type": "string" },
+                                    "acceptance_check": { "type": "string" }
+                                },
+                                "required": ["title", "description", "acceptance_check"]
+                            }
+                        }
                     },
-                    "required": ["task_id", "result"]
+                    "required": ["task_id"]
                 }),
             },
             ToolDefinition {

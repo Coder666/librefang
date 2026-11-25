@@ -7480,6 +7480,14 @@
           "default": "",
           "type": "string"
         },
+        "decomposition_manager": {
+          "description": "Agent name or ID that owns decomposition handoffs when configured.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "max_response_bytes": {
           "description": "Maximum accepted stdout size. Output beyond this limit is rejected.",
           "default": 1048576,

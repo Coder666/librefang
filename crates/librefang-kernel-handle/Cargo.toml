@@ -11,6 +11,7 @@ description = "KernelHandle trait for in-process callers into the LibreFang kern
 librefang-types = { path = "../librefang-types" }
 async-trait = { workspace = true }
 bytes = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }

@@ -4107,6 +4107,7 @@ export interface TaskQueueStatusResponse {
 }
 
 export interface TaskQueueItem {
+  is_decomposition?: boolean;
   id?: string;
   status?: string;
   created_at?: string;
