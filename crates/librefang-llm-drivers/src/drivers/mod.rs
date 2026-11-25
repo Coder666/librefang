@@ -1207,7 +1207,7 @@ mod tests {
         let key = DriverCache::cache_key(&cfg);
         // Shape: "openai|<hex>|||0|300"
         let parts: Vec<&str> = key.split('|').collect();
-        assert_eq!(parts.len(), 6, "cache key shape: {key}");
+        assert_eq!(parts.len(), 7, "cache key shape: {key}");
         let hash_segment = parts[1];
         assert_eq!(
             hash_segment.len(),
