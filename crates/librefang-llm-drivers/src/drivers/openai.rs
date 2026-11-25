@@ -846,6 +846,50 @@ fn merge_extra_body(
     }
 }
 
+/// SenseNova-Loop's chat template requires a user query after provider-specific message conversion.
+fn validate_sensenova_user_query(body: &serde_json::Value) -> Result<(), LlmError> {
+    let model = body["model"].as_str().unwrap_or_default();
+    let model = model.rsplit('/').next().unwrap_or_default();
+    if !model.to_ascii_lowercase().starts_with("sensenova-loop-") {
+        return Ok(());
+    }
+
+    let is_query_text = |text: &str| {
+        let text = text.trim();
+        !(text.is_empty()
+            || text.starts_with("<tool_response>") && text.ends_with("</tool_response>"))
+    };
+    let has_user_query = body["messages"].as_array().is_some_and(|messages| {
+        messages.iter().any(|message| {
+            if message["role"] != "user" {
+                return false;
+            }
+            match &message["content"] {
+                serde_json::Value::String(text) => is_query_text(text),
+                serde_json::Value::Array(parts) => {
+                    parts.iter().any(|part| match part["type"].as_str() {
+                        Some("text") => part["text"].as_str().is_some_and(is_query_text),
+                        Some("image_url") => part["image_url"]["url"]
+                            .as_str()
+                            .is_some_and(|url| !url.trim().is_empty()),
+                        _ => false,
+                    })
+                }
+                _ => false,
+            }
+        })
+    });
+    if has_user_query {
+        Ok(())
+    } else {
+        Err(LlmError::Api {
+            status: 400,
+            message: "SenseNova-Loop requires a user message with content. Supply a user query or restore it before retrying.".into(),
+            code: None,
+        })
+    }
+}
+
 /// How long a model stays muted after rejecting `reasoning_effort`.
 ///
 /// Short enough that an operator who reconfigures the gateway sees the field again without a daemon restart, long enough that a genuinely rejecting gateway is not retried on every single turn of every agent.
@@ -1821,6 +1865,7 @@ impl LlmDriver for OpenAIDriver {
             let mut body =
                 serde_json::to_value(&oai_request).map_err(|e| LlmError::Http(e.to_string()))?;
             merge_extra_body(&oai_request.extra_body, &mut body);
+            validate_sensenova_user_query(&body)?;
 
             let mut req_builder = self
                 .client
@@ -2274,6 +2319,7 @@ impl LlmDriver for OpenAIDriver {
             let mut body =
                 serde_json::to_value(&oai_request).map_err(|e| LlmError::Http(e.to_string()))?;
             merge_extra_body(&oai_request.extra_body, &mut body);
+            validate_sensenova_user_query(&body)?;
 
             let mut req_builder = self
                 .client
@@ -6053,6 +6099,57 @@ mod tests {
     /// sharing a message with a `ToolResult` is silently dropped — the notice
     /// never reached OpenAI / Groq / Moonshot. Folding it into the `ToolResult`
     /// `content` string (the shape this test pins) survives instead.
+    #[tokio::test]
+    async fn sensenova_missing_user_query_is_rejected_before_sending() {
+        let server = wiremock::MockServer::start().await;
+        let driver = OpenAIDriver::new(String::new(), server.uri());
+        let mut request = transport_retry_request();
+        request.system = Some("Task instructions".into());
+        request.extra_body = Some(BTreeMap::from([
+            (
+                "model".into(),
+                serde_json::json!("SenseNova-SI/SenseNova-Loop-9B"),
+            ),
+            (
+                "messages".into(),
+                serde_json::json!([{"role": "system", "content": "Task instructions"}]),
+            ),
+        ]));
+
+        let error = driver.complete(request.clone()).await.unwrap_err();
+        assert!(matches!(error, LlmError::Api { status: 400, .. }));
+        let (tx, _rx) = tokio::sync::mpsc::channel(8);
+        let error = driver.stream(request, tx).await.unwrap_err();
+        assert!(matches!(error, LlmError::Api { status: 400, .. }));
+        assert!(server.received_requests().await.unwrap().is_empty());
+    }
+
+    #[test]
+    fn sensenova_user_query_validation_preserves_valid_payloads() {
+        let body = |model, messages| serde_json::json!({ "model": model, "messages": messages });
+        let invalid = [
+            serde_json::json!([]),
+            serde_json::json!([{"role": "user", "content": "  "}]),
+            serde_json::json!([{"role": "tool", "content": "tool output"}]),
+            serde_json::json!([{"role": "user", "content": "<tool_response>output</tool_response>"}]),
+        ];
+        for messages in invalid {
+            assert!(validate_sensenova_user_query(&body("sensenova-loop-9b", messages)).is_err());
+        }
+        for messages in [
+            serde_json::json!([{"role": "user", "content": "Continue the task"}]),
+            serde_json::json!([{"role": "user", "content": [{"type": "text", "text": "Continue the task"}]}]),
+            serde_json::json!([{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "https://example.invalid/image.png"}}]}]),
+        ] {
+            assert!(validate_sensenova_user_query(&body("sensenova-loop-9b", messages)).is_ok());
+        }
+        assert!(validate_sensenova_user_query(&body(
+            "some-other-model",
+            serde_json::json!([{"role": "system", "content": "Instructions"}]),
+        ))
+        .is_ok());
+    }
+
     #[test]
     fn build_request_folds_dev_loop_notice_into_tool_result_content() {
         use librefang_types::message::Message;
