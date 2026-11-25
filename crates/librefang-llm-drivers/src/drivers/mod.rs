@@ -109,12 +109,12 @@ impl DriverCache {
         let key_hash = hex::encode(&digest[..16]);
 
         format!(
-            "{}|{}|{}|{}|{:?}|{}",
+            "{}|{}|{}|{}|{}|{}",
             config.provider,
             key_hash,
             config.base_url.as_deref().unwrap_or(""),
             config.proxy_url.as_deref().unwrap_or(""),
-            config.request_timeout_secs,
+            format_args!("{:?}", config.request_timeout_secs),
             config.message_timeout_secs,
         )
     }
